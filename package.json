@@ -2,16 +2,15 @@
   "name": "@graphann/client",
   "version": "0.1.0",
   "description": "Official TypeScript client SDK for GraphANN — storage-efficient vector database",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "author": "GraphANN",
   "homepage": "https://graphann.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/graphann/graphann-clients.git",
-    "directory": "typescript"
+    "url": "https://github.com/graphann/graphann-client-typescript.git"
   },
   "bugs": {
-    "url": "https://github.com/graphann/graphann-clients/issues"
+    "url": "https://github.com/graphann/graphann-client-typescript/issues"
   },
   "type": "module",
   "sideEffects": false,
@@ -74,6 +73,6 @@
     "vitest": "^2.1.4"
   },
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   }
 }
