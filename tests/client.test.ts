@@ -605,3 +605,190 @@ describe("204 No Content", () => {
     expect(r).toBeUndefined();
   });
 });
+
+describe("ready()", () => {
+  it("GETs /ready and returns the parsed body", async () => {
+    server.use(
+      http.get(`${BASE}/ready`, () => HttpResponse.json({ status: "ready" })),
+    );
+    const r = await newClient().ready();
+    expect(r).toEqual({ status: "ready" });
+  });
+});
+
+describe("Chunk operations", () => {
+  it("getChunk GETs /chunks/{id} and returns the chunk shape", async () => {
+    server.use(
+      http.get(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/42`,
+        () =>
+          HttpResponse.json({
+            chunk_id: 42,
+            text: "hello",
+            document_id: 7,
+            chunk_index: 0,
+            start: 0,
+            end: 5,
+          }),
+      ),
+    );
+    const r = await newClient().getChunk("i_x", 42);
+    expect(r.chunk_id).toBe(42);
+    expect(r.text).toBe("hello");
+    expect(r.document_id).toBe(7);
+  });
+
+  it("deleteChunk DELETEs /chunks/{id} with chunk_ids body", async () => {
+    let body: unknown = null;
+    server.use(
+      http.delete(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/9`,
+        async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ deleted: 1, index_id: "i_x" });
+        },
+      ),
+    );
+    const r = await newClient().deleteChunk("i_x", 9);
+    expect(body).toEqual({ chunk_ids: [9] });
+    expect(r.deleted).toBe(1);
+  });
+});
+
+describe("Pending queue", () => {
+  it("getPendingStatus GETs /pending", async () => {
+    server.use(
+      http.get(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/pending`,
+        () => HttpResponse.json({ index_id: "i_x", pending_count: 3 }),
+      ),
+    );
+    const r = await newClient().getPendingStatus("i_x");
+    expect(r.pending_count).toBe(3);
+  });
+
+  it("processPending POSTs /process", async () => {
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/process`,
+        () =>
+          HttpResponse.json({
+            index_id: "i_x",
+            processed: 2,
+            chunks_created: 4,
+            chunk_ids: [10, 11, 12, 13],
+          }),
+      ),
+    );
+    const r = await newClient().processPending("i_x");
+    expect(r.processed).toBe(2);
+    expect(r.chunks_created).toBe(4);
+    expect(r.chunk_ids).toEqual([10, 11, 12, 13]);
+  });
+
+  it("clearPending DELETEs /pending", async () => {
+    server.use(
+      http.delete(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/pending`,
+        () =>
+          HttpResponse.json({
+            index_id: "i_x",
+            status: "cleared",
+            message: "Pending documents cleared",
+          }),
+      ),
+    );
+    const r = await newClient().clearPending("i_x");
+    expect(r.status).toBe("cleared");
+  });
+});
+
+describe("Org index listings", () => {
+  it("listSharedIndexes GETs /v1/orgs/{org}/shared/indexes", async () => {
+    let path = "";
+    server.use(
+      http.get(`${BASE}/v1/orgs/org_a/shared/indexes`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ indexes: [], total: 0, org_id: "org_a" });
+      }),
+    );
+    const r = await newClient().listSharedIndexes("org_a");
+    expect(path).toBe("/v1/orgs/org_a/shared/indexes");
+    expect(r.org_id).toBe("org_a");
+  });
+
+  it("listUserIndexes GETs /v1/orgs/{org}/users/{user}/indexes", async () => {
+    let path = "";
+    server.use(
+      http.get(
+        `${BASE}/v1/orgs/org_a/users/u_1/indexes`,
+        ({ request }) => {
+          path = new URL(request.url).pathname;
+          return HttpResponse.json({
+            indexes: [],
+            total: 0,
+            org_id: "org_a",
+            user_id: "u_1",
+          });
+        },
+      ),
+    );
+    const r = await newClient().listUserIndexes("org_a", "u_1");
+    expect(path).toBe("/v1/orgs/org_a/users/u_1/indexes");
+    expect(r.user_id).toBe("u_1");
+  });
+});
+
+describe("LLM settings (org-scoped)", () => {
+  it("getLLMSettings GETs /v1/orgs/{org}/llm-settings", async () => {
+    let path = "";
+    server.use(
+      http.get(`${BASE}/v1/orgs/org_a/llm-settings`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ provider: "openai", model: "gpt-4o-mini" });
+      }),
+    );
+    const r = await newClient().getLLMSettings("org_a");
+    expect(path).toBe("/v1/orgs/org_a/llm-settings");
+    expect(r.provider).toBe("openai");
+  });
+
+  it("updateLLMSettings PATCHes the new path with partial body", async () => {
+    let method = "";
+    let body: unknown = null;
+    server.use(
+      http.patch(
+        `${BASE}/v1/orgs/org_a/llm-settings`,
+        async ({ request }) => {
+          method = request.method;
+          body = await request.json();
+          return HttpResponse.json({
+            message: "updated",
+            org_id: "org_a",
+            settings: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 },
+          });
+        },
+      ),
+    );
+    const r = await newClient().updateLLMSettings("org_a", { temperature: 0.2 });
+    expect(method).toBe("PATCH");
+    expect(body).toEqual({ temperature: 0.2 });
+    expect(r.settings.temperature).toBe(0.2);
+  });
+
+  it("deleteLLMSettings DELETEs the new path", async () => {
+    let path = "";
+    server.use(
+      http.delete(
+        `${BASE}/v1/orgs/org_a/llm-settings`,
+        ({ request }) => {
+          path = new URL(request.url).pathname;
+          return HttpResponse.json({ message: "reset", org_id: "org_a" });
+        },
+      ),
+    );
+    const r = await newClient().deleteLLMSettings("org_a");
+    expect(path).toBe("/v1/orgs/org_a/llm-settings");
+    expect(r.message).toBe("reset");
+  });
+});

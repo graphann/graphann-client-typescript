@@ -171,6 +171,25 @@ export interface ImportDocumentsResponse {
   message?: string;
 }
 
+export interface PendingStatusResponse {
+  index_id: IndexID;
+  pending_count: number;
+}
+
+export interface ProcessPendingResponse {
+  index_id: IndexID;
+  processed: number;
+  chunks_created: number;
+  chunk_ids?: number[];
+}
+
+export interface ClearPendingResponse {
+  index_id: IndexID;
+  status: string;
+  message?: string;
+  cleared?: number;
+}
+
 export interface ListDocumentEntry {
   id: string;
   text?: string;
@@ -242,6 +261,20 @@ export interface GetDocumentResponse {
 export interface CleanupOrphansResponse {
   removed: string[];
   freed_bytes: number;
+}
+
+export interface ChunkResponse {
+  chunk_id: number;
+  text?: string;
+  document_id: number;
+  chunk_index: number;
+  start: number;
+  end: number;
+}
+
+export interface DeleteChunkResponse {
+  deleted: number;
+  index_id: IndexID;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +493,12 @@ export interface UpdateLLMSettingsResponse {
   settings: LLMSettings;
 }
 
+export interface DeleteLLMSettingsResponse {
+  message: string;
+  org_id: string;
+  settings?: LLMSettings;
+}
+
 // ---------------------------------------------------------------------------
 // API keys (forward-looking; server route may not yet exist)
 // ---------------------------------------------------------------------------
@@ -512,6 +551,14 @@ export interface OrgSyncDocumentsResponse {
   user_id: string;
   source_type: string;
   index_type: "personal" | "shared";
+}
+
+export interface OrgIndexListResponse {
+  indexes: IndexInfo[];
+  total: number;
+  org_id: string;
+  /** Set when the listing is scoped to a user; absent for shared listings. */
+  user_id?: string;
 }
 
 // ---------------------------------------------------------------------------

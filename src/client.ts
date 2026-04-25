@@ -22,7 +22,9 @@ import type {
   BuildIndexResponse,
   BulkDeleteByExternalIdsResponse,
   BulkDeleteDocumentsResponse,
+  ChunkResponse,
   ClearIndexResponse,
+  ClearPendingResponse,
   ClusterHealthResponse,
   ClusterNodesResponse,
   ClusterShardsResponse,
@@ -31,7 +33,9 @@ import type {
   CreateAPIKeyRequest,
   CreateIndexRequest,
   CreateTenantRequest,
+  DeleteChunkResponse,
   DeleteDocumentResponse,
+  DeleteLLMSettingsResponse,
   DeleteTenantResponse,
   Document,
   GetDocumentResponse,
@@ -52,9 +56,12 @@ import type {
   LLMSettings,
   MultiSearchRequest,
   MultiSearchResponse,
+  OrgIndexListResponse,
   OrgSyncDocumentsRequest,
   OrgSyncDocumentsResponse,
   Page,
+  PendingStatusResponse,
+  ProcessPendingResponse,
   RequestOptions,
   SearchRequest,
   SearchResponse,
@@ -89,6 +96,22 @@ export class Client {
   async health(opts: RequestOptions = {}): Promise<HealthResponse> {
     return this.send<HealthResponse>(
       { method: "GET", path: "/health", signal: opts.signal },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * GET /ready
+   *
+   * Server returns `{ status: "ready" }` on success and a 503 with an
+   * explanatory `reason` payload while the manager is still warming up.
+   * Non-2xx is mapped to the matching `GraphANNError` subclass like every
+   * other call. Bodyless 200 responses (some proxies strip JSON) parse to
+   * `{}` — the runtime body is whatever the server actually sent.
+   */
+  async ready(opts: RequestOptions = {}): Promise<HealthResponse> {
+    return this.send<HealthResponse>(
+      { method: "GET", path: "/ready", signal: opts.signal },
       { ...opts, idempotent: true },
     );
   }
@@ -258,6 +281,103 @@ export class Client {
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/live-stats`,
       },
       { ...opts, idempotent: true },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Chunks
+  // -------------------------------------------------------------------------
+
+  /** GET /v1/tenants/{tid}/indexes/{iid}/chunks/{chunkID} */
+  async getChunk(
+    indexId: IndexID,
+    chunkId: number | string,
+    opts: RequestOptions = {},
+  ): Promise<ChunkResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<ChunkResponse>(
+      {
+        method: "GET",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/chunks/${encodeURIComponent(String(chunkId))}`,
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * DELETE /v1/tenants/{tid}/indexes/{iid}/chunks/{chunkID}
+   *
+   * Server-side this route accepts a `{chunk_ids: [...]}` body and ignores
+   * the path-segment chunk ID — it is a per-call placeholder. The TS SDK
+   * exposes the simpler per-chunk shape used by Python: pass a single
+   * chunk ID, the SDK wraps it for the wire protocol.
+   */
+  async deleteChunk(
+    indexId: IndexID,
+    chunkId: number | string,
+    opts: RequestOptions = {},
+  ): Promise<DeleteChunkResponse> {
+    const tenantId = this.requireTenant(opts);
+    const numericId = typeof chunkId === "number" ? chunkId : Number(chunkId);
+    if (!Number.isFinite(numericId)) {
+      throw new GraphANNError(`deleteChunk: chunkId must be a finite number, got ${String(chunkId)}`);
+    }
+    return this.send<DeleteChunkResponse>(
+      {
+        method: "DELETE",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/chunks/${encodeURIComponent(String(chunkId))}`,
+        body: { chunk_ids: [numericId] },
+      },
+      opts,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Pending queue (batch import)
+  // -------------------------------------------------------------------------
+
+  /** GET /v1/tenants/{tid}/indexes/{iid}/pending */
+  async getPendingStatus(
+    indexId: IndexID,
+    opts: RequestOptions = {},
+  ): Promise<PendingStatusResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<PendingStatusResponse>(
+      {
+        method: "GET",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/pending`,
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /** POST /v1/tenants/{tid}/indexes/{iid}/process */
+  async processPending(
+    indexId: IndexID,
+    opts: RequestOptions = {},
+  ): Promise<ProcessPendingResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<ProcessPendingResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/process`,
+      },
+      opts,
+    );
+  }
+
+  /** DELETE /v1/tenants/{tid}/indexes/{iid}/pending */
+  async clearPending(
+    indexId: IndexID,
+    opts: RequestOptions = {},
+  ): Promise<ClearPendingResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<ClearPendingResponse>(
+      {
+        method: "DELETE",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/pending`,
+      },
+      opts,
     );
   }
 
@@ -515,6 +635,35 @@ export class Client {
     );
   }
 
+  /** GET /v1/orgs/{orgID}/shared/indexes */
+  async listSharedIndexes(
+    orgId: string,
+    opts: RequestOptions = {},
+  ): Promise<OrgIndexListResponse> {
+    return this.send<OrgIndexListResponse>(
+      {
+        method: "GET",
+        path: `/v1/orgs/${encodeURIComponent(orgId)}/shared/indexes`,
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /** GET /v1/orgs/{orgID}/users/{userID}/indexes */
+  async listUserIndexes(
+    orgId: string,
+    userId: string,
+    opts: RequestOptions = {},
+  ): Promise<OrgIndexListResponse> {
+    return this.send<OrgIndexListResponse>(
+      {
+        method: "GET",
+        path: `/v1/orgs/${encodeURIComponent(orgId)}/users/${encodeURIComponent(userId)}/indexes`,
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Jobs (hot-model-switch + read/list)
   // -------------------------------------------------------------------------
@@ -600,44 +749,49 @@ export class Client {
 
   // -------------------------------------------------------------------------
   // LLM Settings (org-scoped)
+  //
+  // Server route is /v1/orgs/{orgID}/llm-settings — the older /settings/llm
+  // path was removed before the SDK shipped. Updates are partial-merge via
+  // PATCH; pass only the fields you want to change. DELETE resets to
+  // server defaults.
   // -------------------------------------------------------------------------
 
-  /** GET /v1/orgs/{orgID}/settings/llm */
+  /** GET /v1/orgs/{orgID}/llm-settings */
   async getLLMSettings(orgId: string, opts: RequestOptions = {}): Promise<LLMSettings> {
     return this.send<LLMSettings>(
       {
         method: "GET",
-        path: `/v1/orgs/${encodeURIComponent(orgId)}/settings/llm`,
+        path: `/v1/orgs/${encodeURIComponent(orgId)}/llm-settings`,
       },
       { ...opts, idempotent: true },
     );
   }
 
-  /** PUT /v1/orgs/{orgID}/settings/llm */
+  /** PATCH /v1/orgs/{orgID}/llm-settings (partial merge) */
   async updateLLMSettings(
     orgId: string,
-    settings: LLMSettings,
+    settings: Partial<LLMSettings>,
     opts: RequestOptions = {},
   ): Promise<UpdateLLMSettingsResponse> {
     return this.send<UpdateLLMSettingsResponse>(
       {
-        method: "PUT",
-        path: `/v1/orgs/${encodeURIComponent(orgId)}/settings/llm`,
+        method: "PATCH",
+        path: `/v1/orgs/${encodeURIComponent(orgId)}/llm-settings`,
         body: settings,
       },
       opts,
     );
   }
 
-  /** DELETE /v1/orgs/{orgID}/settings/llm */
+  /** DELETE /v1/orgs/{orgID}/llm-settings */
   async deleteLLMSettings(
     orgId: string,
     opts: RequestOptions = {},
-  ): Promise<UpdateLLMSettingsResponse> {
-    return this.send<UpdateLLMSettingsResponse>(
+  ): Promise<DeleteLLMSettingsResponse> {
+    return this.send<DeleteLLMSettingsResponse>(
       {
         method: "DELETE",
-        path: `/v1/orgs/${encodeURIComponent(orgId)}/settings/llm`,
+        path: `/v1/orgs/${encodeURIComponent(orgId)}/llm-settings`,
       },
       opts,
     );
