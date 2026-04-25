@@ -1,0 +1,12 @@
+tests/
+examples/
+coverage/
+*.test.ts
+.eslintrc*
+eslint.config.*
+.prettierrc*
+vitest.config.*
+tsup.config.*
+tsconfig*.json
+!tsconfig.build.json
+.gitignore

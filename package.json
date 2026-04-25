@@ -1,0 +1,79 @@
+{
+  "name": "@graphann/client",
+  "version": "0.1.0",
+  "description": "Official TypeScript client SDK for GraphANN — storage-efficient vector database",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "GraphANN",
+  "homepage": "https://graphann.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/graphann/graphann-clients.git",
+    "directory": "typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/graphann/graphann-clients/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "graphann",
+    "vector-database",
+    "embeddings",
+    "ann",
+    "semantic-search",
+    "rag",
+    "client",
+    "sdk"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:clean": "rm -rf dist && pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"examples/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"examples/**/*.ts\"",
+    "prepublishOnly": "pnpm build:clean && pnpm test && pnpm lint && pnpm typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.13.0",
+    "@typescript-eslint/parser": "^8.13.0",
+    "@vitest/coverage-v8": "^2.1.4",
+    "eslint": "^9.14.0",
+    "msw": "^2.6.4",
+    "prettier": "^3.3.3",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.13.0",
+    "vitest": "^2.1.4"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}
