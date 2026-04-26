@@ -496,7 +496,7 @@ describe("Document operations", () => {
 });
 
 describe("Cluster + jobs", () => {
-  it("clusterHealth GETs /v1/cluster/health", async () => {
+  it("getClusterHealth GETs /v1/cluster/health", async () => {
     server.use(
       http.get(`${BASE}/v1/cluster/health`, () =>
         HttpResponse.json({
@@ -507,7 +507,7 @@ describe("Cluster + jobs", () => {
         }),
       ),
     );
-    const r = await newClient().clusterHealth();
+    const r = await newClient().getClusterHealth();
     expect(r.status).toBe("ok");
   });
 
@@ -638,20 +638,20 @@ describe("Chunk operations", () => {
     expect(r.document_id).toBe(7);
   });
 
-  it("deleteChunk DELETEs /chunks/{id} with chunk_ids body", async () => {
+  it("deleteChunks DELETEs /chunks/0 with chunk_ids body", async () => {
     let body: unknown = null;
     server.use(
       http.delete(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/9`,
+        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/0`,
         async ({ request }) => {
           body = await request.json();
-          return HttpResponse.json({ deleted: 1, index_id: "i_x" });
+          return HttpResponse.json({ deleted: 2, index_id: "i_x" });
         },
       ),
     );
-    const r = await newClient().deleteChunk("i_x", 9);
-    expect(body).toEqual({ chunk_ids: [9] });
-    expect(r.deleted).toBe(1);
+    const r = await newClient().deleteChunks("i_x", [9, 10]);
+    expect(body).toEqual({ chunk_ids: [9, 10] });
+    expect(r.deleted).toBe(2);
   });
 });
 

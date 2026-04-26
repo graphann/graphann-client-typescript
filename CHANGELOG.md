@@ -4,6 +4,45 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.2.0
+
+### Breaking
+
+Method names on `Client` are aligned with the sibling SDKs (Go, Python).
+Wire protocol is unchanged; only the TypeScript surface moved.
+
+| Before              | After                |
+|---------------------|----------------------|
+| `clusterHealth`     | `getClusterHealth`   |
+| `clusterNodes`      | `getClusterNodes`    |
+| `clusterShards`     | `getClusterShards`   |
+| `syncOrgDocuments`  | `syncDocuments`      |
+
+`Client.deleteChunk(indexId, chunkId)` was replaced with
+`Client.deleteChunks(indexId, chunkIds: number[])` to match the
+server's batch-delete semantics (the route already accepted
+`{chunk_ids: [...]}` and ignored the path-segment chunk ID; the SDK now
+sends `/0` as a sentinel like the Go SDK). `DeleteChunkResponse` is now
+`DeleteChunksResponse` (shape unchanged: `{deleted, index_id}`).
+
+#### Migration
+
+```ts
+// before
+await client.clusterHealth();
+await client.clusterNodes();
+await client.clusterShards();
+await client.syncOrgDocuments({ orgId, user_id, source_type, shared, documents });
+await client.deleteChunk(indexId, 9);
+
+// after
+await client.getClusterHealth();
+await client.getClusterNodes();
+await client.getClusterShards();
+await client.syncDocuments({ orgId, user_id, source_type, shared, documents });
+await client.deleteChunks(indexId, [9]);
+```
+
 ## 0.1.1
 
 ### Added

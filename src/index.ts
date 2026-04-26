@@ -47,7 +47,7 @@ export type {
   CreateAPIKeyRequest,
   CreateIndexRequest,
   CreateTenantRequest,
-  DeleteChunkResponse,
+  DeleteChunksResponse,
   DeleteDocumentResponse,
   DeleteLLMSettingsResponse,
   DeleteTenantResponse,

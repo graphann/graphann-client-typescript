@@ -33,7 +33,7 @@ import type {
   CreateAPIKeyRequest,
   CreateIndexRequest,
   CreateTenantRequest,
-  DeleteChunkResponse,
+  DeleteChunksResponse,
   DeleteDocumentResponse,
   DeleteLLMSettingsResponse,
   DeleteTenantResponse,
@@ -308,25 +308,29 @@ export class Client {
    * DELETE /v1/tenants/{tid}/indexes/{iid}/chunks/{chunkID}
    *
    * Server-side this route accepts a `{chunk_ids: [...]}` body and ignores
-   * the path-segment chunk ID — it is a per-call placeholder. The TS SDK
-   * exposes the simpler per-chunk shape used by Python: pass a single
-   * chunk ID, the SDK wraps it for the wire protocol.
+   * the path-segment chunk ID — it is a per-call placeholder, so the SDK
+   * sends `/0` as a sentinel (matches the Go SDK's `DeleteChunks`).
+   * Callers pass the full list of chunk IDs to delete.
    */
-  async deleteChunk(
+  async deleteChunks(
     indexId: IndexID,
-    chunkId: number | string,
+    chunkIds: number[],
     opts: RequestOptions = {},
-  ): Promise<DeleteChunkResponse> {
+  ): Promise<DeleteChunksResponse> {
     const tenantId = this.requireTenant(opts);
-    const numericId = typeof chunkId === "number" ? chunkId : Number(chunkId);
-    if (!Number.isFinite(numericId)) {
-      throw new GraphANNError(`deleteChunk: chunkId must be a finite number, got ${String(chunkId)}`);
+    if (!Array.isArray(chunkIds) || chunkIds.length === 0) {
+      throw new GraphANNError("deleteChunks: chunkIds must be a non-empty number[]");
     }
-    return this.send<DeleteChunkResponse>(
+    for (const id of chunkIds) {
+      if (typeof id !== "number" || !Number.isFinite(id)) {
+        throw new GraphANNError(`deleteChunks: chunkIds must be finite numbers, got ${String(id)}`);
+      }
+    }
+    return this.send<DeleteChunksResponse>(
       {
         method: "DELETE",
-        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/chunks/${encodeURIComponent(String(chunkId))}`,
-        body: { chunk_ids: [numericId] },
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/chunks/0`,
+        body: { chunk_ids: chunkIds },
       },
       opts,
     );
@@ -615,7 +619,7 @@ export class Client {
   // -------------------------------------------------------------------------
 
   /** POST /v1/orgs/{orgID}/documents */
-  async syncOrgDocuments(
+  async syncDocuments(
     req: OrgSyncDocumentsRequest,
     opts: RequestOptions = {},
   ): Promise<OrgSyncDocumentsResponse> {
@@ -724,7 +728,7 @@ export class Client {
   // -------------------------------------------------------------------------
 
   /** GET /v1/cluster/nodes (Admin) */
-  async clusterNodes(opts: RequestOptions = {}): Promise<ClusterNodesResponse> {
+  async getClusterNodes(opts: RequestOptions = {}): Promise<ClusterNodesResponse> {
     return this.send<ClusterNodesResponse>(
       { method: "GET", path: "/v1/cluster/nodes" },
       { ...opts, idempotent: true },
@@ -732,7 +736,7 @@ export class Client {
   }
 
   /** GET /v1/cluster/shards (Admin) */
-  async clusterShards(opts: RequestOptions = {}): Promise<ClusterShardsResponse> {
+  async getClusterShards(opts: RequestOptions = {}): Promise<ClusterShardsResponse> {
     return this.send<ClusterShardsResponse>(
       { method: "GET", path: "/v1/cluster/shards" },
       { ...opts, idempotent: true },
@@ -740,7 +744,7 @@ export class Client {
   }
 
   /** GET /v1/cluster/health */
-  async clusterHealth(opts: RequestOptions = {}): Promise<ClusterHealthResponse> {
+  async getClusterHealth(opts: RequestOptions = {}): Promise<ClusterHealthResponse> {
     return this.send<ClusterHealthResponse>(
       { method: "GET", path: "/v1/cluster/health" },
       { ...opts, idempotent: true },

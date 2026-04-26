@@ -272,7 +272,7 @@ export interface ChunkResponse {
   end: number;
 }
 
-export interface DeleteChunkResponse {
+export interface DeleteChunksResponse {
   deleted: number;
   index_id: IndexID;
 }

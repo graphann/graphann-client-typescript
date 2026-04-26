@@ -146,10 +146,10 @@ Status mapping:
 | Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans` |
 | Search    | `search`, `searchText`, `searchVector`, `multiSearch` |
 | Jobs      | `switchEmbeddingModel`, `getJob`, `listJobs` |
-| Cluster   | `clusterNodes`, `clusterShards`, `clusterHealth` |
+| Cluster   | `getClusterNodes`, `getClusterShards`, `getClusterHealth` |
 | LLM       | `getLLMSettings`, `updateLLMSettings`, `deleteLLMSettings` |
 | API keys  | `createAPIKey`, `listAPIKeys`, `revokeAPIKey` |
-| Org sync  | `syncOrgDocuments` |
+| Org sync  | `syncDocuments` |
 
 ## Performance
 
