@@ -65,7 +65,19 @@ async function main(): Promise<void> {
     }
   }
 
-  // 5. Ingest 10 documents.
+  // 5. Upsert a resource (atomic create-or-replace by resource ID).
+  const upserted = await client.upsertResource(
+    index.id,
+    "resource-quickstart",
+    { text: "GraphANN stores graph topology, not embeddings.", metadata: { src: "quickstart" } },
+    { tenantId: tenant.id },
+  );
+  console.log(
+    `Resource ${upserted.resource_id}: op=${upserted.operation} ` +
+      `added=${upserted.chunks_added} tombstoned=${upserted.chunks_tombstoned}`,
+  );
+
+  // 7. Ingest 10 documents.
   const docs = Array.from({ length: 10 }, (_, i) => ({
     id: `doc-${i}`,
     text: `Document ${i}: vector databases recompute embeddings on demand to save storage.`,
@@ -73,7 +85,7 @@ async function main(): Promise<void> {
   const ingest = await client.addDocuments(index.id, docs, { tenantId: tenant.id });
   console.log(`Ingested ${ingest.added} chunks (ids ${ingest.chunk_ids.join(",")})`);
 
-  // 6. Search.
+  // 8. Search.
   const r1 = await client.search(
     { indexId: index.id, query: "vector database storage savings", k: 5 },
     { tenantId: tenant.id },
@@ -83,7 +95,7 @@ async function main(): Promise<void> {
     console.log(`  ${hit.id} score=${hit.score.toFixed(4)}`);
   }
 
-  // 7. Switch the embedding model. This is async — poll the job until done.
+  // 9. Switch the embedding model. This is async — poll the job until done.
   try {
     const job = await client.switchEmbeddingModel(
       {
@@ -115,7 +127,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 8. Re-search after the swap.
+  // 10. Re-search after the swap.
   const r2 = await client.search(
     { indexId: index.id, query: "vector database storage savings", k: 5 },
     { tenantId: tenant.id },

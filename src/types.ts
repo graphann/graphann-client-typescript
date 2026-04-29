@@ -74,18 +74,26 @@ export interface IndexInfo {
   created_by?: string;
   path?: string;
   metadata?: Record<string, string>;
+  compression?: string;
+  approximate?: boolean;
 }
+
+export type CompressionType = "none" | "scalar" | "binary" | "pq" | "recompute" | "";
 
 export interface CreateIndexRequest {
   /** Optional explicit ID for idempotent creation. */
   id?: string;
   name: string;
   description?: string;
+  compression?: CompressionType;
+  approximate?: boolean;
 }
 
 export interface UpdateIndexRequest {
   name?: string;
   description?: string;
+  compression?: CompressionType;
+  approximate?: boolean;
 }
 
 export interface ListIndexesResponse {
@@ -97,12 +105,6 @@ export interface IndexStatusResponse {
   index_id: IndexID;
   status: IndexStatus;
   error?: string;
-}
-
-export interface BuildIndexResponse {
-  index_id: IndexID;
-  status: string;
-  message: string;
 }
 
 export interface CompactIndexResponse {
@@ -285,6 +287,7 @@ export interface SearchFilter {
   repo_ids?: string[];
   exclude_external_ids?: string[];
   metadata_filter?: Record<string, unknown>;
+  equals?: Record<string, string>;
 }
 
 export interface SearchRequest {
@@ -294,22 +297,6 @@ export interface SearchRequest {
   k?: number;
   filter?: SearchFilter;
   /** Tenant override when not set on the client. */
-  tenantId?: TenantID;
-}
-
-export interface SearchTextRequest {
-  indexId: IndexID;
-  query: string;
-  k?: number;
-  filter?: SearchFilter;
-  tenantId?: TenantID;
-}
-
-export interface SearchVectorRequest {
-  indexId: IndexID;
-  vector: number[];
-  k?: number;
-  filter?: SearchFilter;
   tenantId?: TenantID;
 }
 
@@ -559,6 +546,22 @@ export interface OrgIndexListResponse {
   org_id: string;
   /** Set when the listing is scoped to a user; absent for shared listings. */
   user_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Resources (atomic upsert)
+// ---------------------------------------------------------------------------
+
+export interface UpsertResourceRequest {
+  text: string;
+  metadata?: Record<string, string>;
+}
+
+export interface UpsertResourceResponse {
+  resource_id: string;
+  chunks_added: number;
+  chunks_tombstoned: number;
+  operation: "create" | "update";
 }
 
 // ---------------------------------------------------------------------------

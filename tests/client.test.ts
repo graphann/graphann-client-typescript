@@ -386,16 +386,119 @@ describe("Search request building", () => {
     expect(captured).toEqual({ query: "hello", k: 7 });
   });
 
-  it("sends `vector` for vector search", async () => {
+  it("sends `vector` for vector search via search()", async () => {
     let captured: unknown = null;
     server.use(
-      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search/vector`, async ({ request }) => {
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, async ({ request }) => {
         captured = await request.json();
         return HttpResponse.json({ results: [], total: 0 });
       }),
     );
-    await newClient().searchVector({ indexId: "i_x", vector: [0.1, 0.2], k: 5 });
+    await newClient().search({ indexId: "i_x", vector: [0.1, 0.2], k: 5 });
     expect(captured).toEqual({ vector: [0.1, 0.2], k: 5 });
+  });
+
+  it("sends filter.equals in search body", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ results: [], total: 0 });
+      }),
+    );
+    await newClient().search({
+      indexId: "i_x",
+      query: "hi",
+      filter: { equals: { lang: "en", env: "prod" } },
+    });
+    expect((captured as { filter: { equals: Record<string, string> } }).filter.equals).toEqual({
+      lang: "en",
+      env: "prod",
+    });
+  });
+});
+
+describe("upsertResource", () => {
+  it("sends PUT with text and metadata", async () => {
+    let captured: unknown = null;
+    let capturedMethod = "";
+    server.use(
+      http.put(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`,
+        async ({ request }) => {
+          capturedMethod = request.method;
+          captured = await request.json();
+          return HttpResponse.json({
+            resource_id: "doc-1",
+            chunks_added: 3,
+            chunks_tombstoned: 0,
+            operation: "create",
+          });
+        },
+      ),
+    );
+    const resp = await newClient().upsertResource("i_x", "doc-1", {
+      text: "hello world",
+      metadata: { src: "test" },
+    });
+    expect(capturedMethod).toBe("PUT");
+    expect(captured).toEqual({ text: "hello world", metadata: { src: "test" } });
+    expect(resp.resource_id).toBe("doc-1");
+    expect(resp.chunks_added).toBe(3);
+    expect(resp.operation).toBe("create");
+  });
+
+  it("returns update operation on second call", async () => {
+    server.use(
+      http.put(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`,
+        () =>
+          HttpResponse.json({
+            resource_id: "doc-1",
+            chunks_added: 2,
+            chunks_tombstoned: 3,
+            operation: "update",
+          }),
+      ),
+    );
+    const resp = await newClient().upsertResource("i_x", "doc-1", { text: "updated" });
+    expect(resp.operation).toBe("update");
+    expect(resp.chunks_tombstoned).toBe(3);
+  });
+});
+
+describe("createIndex with compression and approximate", () => {
+  it("sends compression and approximate fields", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          {
+            id: "i_new",
+            tenant_id: "t_default",
+            name: "demo",
+            status: "empty",
+            num_docs: 0,
+            num_chunks: 0,
+            dimension: 0,
+            created_at: "2026-04-28T00:00:00Z",
+            updated_at: "2026-04-28T00:00:00Z",
+            compression: "pq",
+            approximate: true,
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const idx = await newClient().createIndex({
+      name: "demo",
+      compression: "pq",
+      approximate: true,
+    });
+    expect(captured).toEqual({ name: "demo", compression: "pq", approximate: true });
+    expect(idx.compression).toBe("pq");
+    expect(idx.approximate).toBe(true);
   });
 });
 

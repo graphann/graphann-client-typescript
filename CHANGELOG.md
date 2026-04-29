@@ -4,6 +4,39 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.0
+
+### Breaking
+
+- `Client.searchText(req)` removed — endpoint deleted server-side. Use
+  `Client.search({ indexId, query, k, filter })` instead.
+- `Client.searchVector(req)` removed — endpoint deleted server-side. Use
+  `Client.search({ indexId, vector, k, filter })` instead.
+- `Client.buildIndex(indexId)` removed — was a no-op stub; endpoint deleted
+  server-side.
+- Types removed from public exports: `SearchTextRequest`, `SearchVectorRequest`,
+  `BuildIndexResponse`.
+
+### Added
+
+- `Client.upsertResource(indexId, resourceId, req)` — `PUT
+  .../resources/{resourceID}`. Atomically creates or replaces a named resource
+  in one round-trip. Returns `UpsertResourceResponse` with `resource_id`,
+  `chunks_added`, `chunks_tombstoned`, `operation` (`"create"` | `"update"`).
+- New types exported: `UpsertResourceRequest`, `UpsertResourceResponse`,
+  `CompressionType`.
+
+### Changed
+
+- `CreateIndexRequest` and `UpdateIndexRequest` gain optional `compression`
+  (`CompressionType`) and `approximate` (`boolean`) fields.
+- `IndexInfo` gains optional `compression` and `approximate` fields.
+- `SearchFilter` gains optional `equals` (`Record<string, string>`) for
+  metadata pre-filtering.
+- `compactIndex` now documents that a 409 response throws `ConflictError`
+  (compaction already running — retry after back-off).
+- `SDK_VERSION` bumped to `"0.3.0"`.
+
 ## 0.2.0
 
 ### Breaking

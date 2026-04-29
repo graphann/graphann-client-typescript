@@ -19,7 +19,6 @@ import { SingleFlight, stableHash } from "./singleflight.js";
 import type {
   AddDocumentsResponse,
   APIKey,
-  BuildIndexResponse,
   BulkDeleteByExternalIdsResponse,
   BulkDeleteDocumentsResponse,
   ChunkResponse,
@@ -65,14 +64,14 @@ import type {
   RequestOptions,
   SearchRequest,
   SearchResponse,
-  SearchTextRequest,
-  SearchVectorRequest,
   SwitchEmbeddingModelRequest,
   SwitchEmbeddingModelResponse,
   Tenant,
   TenantID,
   UpdateIndexRequest,
   UpdateLLMSettingsResponse,
+  UpsertResourceRequest,
+  UpsertResourceResponse,
 } from "./types.js";
 
 export class Client {
@@ -233,19 +232,12 @@ export class Client {
     );
   }
 
-  /** POST /v1/tenants/{tid}/indexes/{iid}/build */
-  async buildIndex(indexId: IndexID, opts: RequestOptions = {}): Promise<BuildIndexResponse> {
-    const tenantId = this.requireTenant(opts);
-    return this.send<BuildIndexResponse>(
-      {
-        method: "POST",
-        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/build`,
-      },
-      opts,
-    );
-  }
-
-  /** POST /v1/tenants/{tid}/indexes/{iid}/compact */
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/compact
+   *
+   * Throws `ConflictError` (HTTP 409) when a compaction is already running.
+   * Callers should catch and retry after a back-off.
+   */
   async compactIndex(
     indexId: IndexID,
     opts: RequestOptions = {},
@@ -556,41 +548,6 @@ export class Client {
     );
   }
 
-  /** POST /v1/tenants/{tid}/indexes/{iid}/search/text */
-  async searchText(req: SearchTextRequest, opts: RequestOptions = {}): Promise<SearchResponse> {
-    const tenantId = req.tenantId ?? this.requireTenant(opts);
-    const body: Record<string, unknown> = { query: req.query };
-    if (req.k !== undefined) body.k = req.k;
-    if (req.filter !== undefined) body.filter = req.filter;
-    return this.send<SearchResponse>(
-      {
-        method: "POST",
-        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(req.indexId)}/search/text`,
-        body,
-      },
-      { ...opts, idempotent: true },
-    );
-  }
-
-  /** POST /v1/tenants/{tid}/indexes/{iid}/search/vector */
-  async searchVector(
-    req: SearchVectorRequest,
-    opts: RequestOptions = {},
-  ): Promise<SearchResponse> {
-    const tenantId = req.tenantId ?? this.requireTenant(opts);
-    const body: Record<string, unknown> = { vector: req.vector };
-    if (req.k !== undefined) body.k = req.k;
-    if (req.filter !== undefined) body.filter = req.filter;
-    return this.send<SearchResponse>(
-      {
-        method: "POST",
-        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(req.indexId)}/search/vector`,
-        body,
-      },
-      { ...opts, idempotent: true },
-    );
-  }
-
   /** POST /v1/orgs/{orgID}/users/{userID}/search */
   async multiSearch(
     req: MultiSearchRequest,
@@ -845,6 +802,35 @@ export class Client {
       {
         method: "DELETE",
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/api-keys/${encodeURIComponent(keyId)}`,
+      },
+      opts,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Resources (atomic upsert)
+  // -------------------------------------------------------------------------
+
+  /**
+   * PUT /v1/tenants/{tid}/indexes/{iid}/resources/{resourceID}
+   *
+   * Atomically creates or replaces a named resource: parses the text, chunks
+   * it, embeds it, and swaps any prior chunks for this resource in one round-
+   * trip. The response indicates whether the resource was `"create"`d or
+   * `"update"`d and how many chunks were added / tombstoned.
+   */
+  async upsertResource(
+    indexId: IndexID,
+    resourceId: string,
+    req: UpsertResourceRequest,
+    opts: RequestOptions = {},
+  ): Promise<UpsertResourceResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<UpsertResourceResponse>(
+      {
+        method: "PUT",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/resources/${encodeURIComponent(resourceId)}`,
+        body: req,
       },
       opts,
     );
