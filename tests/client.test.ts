@@ -511,7 +511,7 @@ describe("Document operations", () => {
         async ({ request }) => {
           captured = await request.json();
           return HttpResponse.json(
-            { added: 2, index_id: "i_x", chunk_ids: [0, 1] },
+            { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
             { status: 201 },
           );
         },
@@ -665,7 +665,7 @@ describe("Gzip threshold", () => {
           const buf = await request.arrayBuffer();
           length = buf.byteLength;
           return HttpResponse.json(
-            { added: 1, index_id: "i_x", chunk_ids: [0] },
+            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
             { status: 201 },
           );
         },
@@ -685,7 +685,7 @@ describe("Gzip threshold", () => {
         ({ request }) => {
           encoding = request.headers.get("content-encoding");
           return HttpResponse.json(
-            { added: 1, index_id: "i_x", chunk_ids: [0] },
+            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
             { status: 201 },
           );
         },
@@ -779,14 +779,14 @@ describe("Pending queue", () => {
             index_id: "i_x",
             processed: 2,
             chunks_created: 4,
-            chunk_ids: [10, 11, 12, 13],
+            chunk_ids: ["c-10", "c-11", "c-12", "c-13"],
           }),
       ),
     );
     const r = await newClient().processPending("i_x");
     expect(r.processed).toBe(2);
     expect(r.chunks_created).toBe(4);
-    expect(r.chunk_ids).toEqual([10, 11, 12, 13]);
+    expect(r.chunk_ids).toEqual(["c-10", "c-11", "c-12", "c-13"]);
   });
 
   it("clearPending DELETEs /pending", async () => {

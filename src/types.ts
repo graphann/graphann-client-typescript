@@ -161,7 +161,8 @@ export interface AddDocumentsRequest {
 export interface AddDocumentsResponse {
   added: number;
   index_id: IndexID;
-  chunk_ids: number[];
+  // Server emits []store.ChunkID (= []string) UUIDs, not numbers.
+  chunk_ids: string[];
 }
 
 export interface ImportDocumentsResponse {
@@ -182,7 +183,8 @@ export interface ProcessPendingResponse {
   index_id: IndexID;
   processed: number;
   chunks_created: number;
-  chunk_ids?: number[];
+  // Server emits []store.ChunkID (= []string) UUIDs, not numbers.
+  chunk_ids?: string[];
 }
 
 export interface ClearPendingResponse {
