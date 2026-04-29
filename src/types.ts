@@ -265,6 +265,16 @@ export interface CleanupOrphansResponse {
   freed_bytes: number;
 }
 
+/**
+ * Body returned by both `POST .../indexes/{id}/gc` and `POST /v1/admin/gc`.
+ * Reports the count of expired documents reclaimed.
+ */
+export interface GCResponse {
+  /** Index id, present on per-index GC, omitted for admin GC. */
+  index_id?: string;
+  deleted_count: number;
+}
+
 export interface ChunkResponse {
   chunk_id: number;
   text?: string;

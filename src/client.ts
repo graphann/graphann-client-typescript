@@ -30,6 +30,7 @@ import type {
   CompactIndexResponse,
   CleanupOrphansResponse,
   CreateAPIKeyRequest,
+  GCResponse,
   CreateIndexRequest,
   CreateTenantRequest,
   DeleteChunksResponse,
@@ -521,6 +522,29 @@ export class Client {
       { method: "POST", path: "/v1/admin/cleanup-orphans" },
       opts,
     );
+  }
+
+  /**
+   * POST /v1/tenants/{tenantId}/indexes/{indexId}/gc — sweep expired
+   * documents for one index. Idempotent (returns 0 the second time).
+   */
+  async runIndexGC(
+    tenantId: string,
+    indexId: string,
+    opts: RequestOptions = {},
+  ): Promise<GCResponse> {
+    return this.send<GCResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/gc`,
+      },
+      opts,
+    );
+  }
+
+  /** POST /v1/admin/gc — sweep expired documents across every loaded index. */
+  async runAdminGC(opts: RequestOptions = {}): Promise<GCResponse> {
+    return this.send<GCResponse>({ method: "POST", path: "/v1/admin/gc" }, opts);
   }
 
   // -------------------------------------------------------------------------
