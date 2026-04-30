@@ -262,9 +262,20 @@ export interface GetDocumentResponse {
   total_chunks: number;
 }
 
+/**
+ * Body returned by `POST /v1/admin/cleanup-orphans`.
+ *
+ * `min_age` is a Go-style duration string echoing the cutoff the server
+ * actually applied (e.g. `"1h0m0s"`, `"24h0m0s"`). `dry_run` echoes the
+ * dry-run flag — when true, `removed` is what would have been deleted,
+ * not what was deleted. Both fields default to `""` / `false` when an
+ * older server omits them.
+ */
 export interface CleanupOrphansResponse {
   removed: string[];
   freed_bytes: number;
+  min_age?: string;
+  dry_run?: boolean;
 }
 
 /**

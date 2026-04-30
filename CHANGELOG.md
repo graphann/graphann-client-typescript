@@ -4,6 +4,24 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Breaking
+
+- `Client.cleanupOrphans` signature is now
+  `cleanupOrphans(minAge?: string, dryRun?: boolean, opts?: RequestOptions)`.
+  The previous signature accepted `RequestOptions` as the first
+  parameter; callers that passed `opts` directly must move it to the
+  third position. Default-arg callers (`client.cleanupOrphans()`) are
+  unaffected. Server enforces a 5-minute floor on positive `minAge`
+  values.
+
+### Changed
+
+- `CleanupOrphansResponse` gains optional `min_age?: string` and
+  `dry_run?: boolean` fields echoing what the server applied. Older
+  servers that omit them yield `undefined`.
+
 ## 0.3.0
 
 ### Breaking

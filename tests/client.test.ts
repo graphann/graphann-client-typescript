@@ -895,3 +895,52 @@ describe("LLM settings (org-scoped)", () => {
     expect(r.message).toBe("reset");
   });
 });
+
+describe("cleanupOrphans", () => {
+  it("default call sends no query params and decodes the response", async () => {
+    let url: URL | null = null;
+    server.use(
+      http.post(`${BASE}/v1/admin/cleanup-orphans`, ({ request }) => {
+        url = new URL(request.url);
+        return HttpResponse.json({
+          removed: ["/data/tenants/t/indexes/i.compact"],
+          freed_bytes: 4096,
+          min_age: "1h0m0s",
+          dry_run: false,
+        });
+      }),
+    );
+
+    const resp = await newClient().cleanupOrphans();
+    expect(url).not.toBeNull();
+    expect(url!.searchParams.get("min_age")).toBeNull();
+    expect(url!.searchParams.get("dry_run")).toBeNull();
+    expect(resp.freed_bytes).toBe(4096);
+    expect(resp.removed).toEqual(["/data/tenants/t/indexes/i.compact"]);
+    expect(resp.min_age).toBe("1h0m0s");
+    expect(resp.dry_run).toBe(false);
+  });
+
+  it("forwards minAge and dryRun as query params", async () => {
+    let url: URL | null = null;
+    server.use(
+      http.post(`${BASE}/v1/admin/cleanup-orphans`, ({ request }) => {
+        url = new URL(request.url);
+        return HttpResponse.json({
+          removed: ["/data/tenants/t/indexes/i.pre-reembed.20260101T000000Z"],
+          freed_bytes: 0,
+          min_age: "24h0m0s",
+          dry_run: true,
+        });
+      }),
+    );
+
+    const resp = await newClient().cleanupOrphans("24h", true);
+    expect(url).not.toBeNull();
+    expect(url!.searchParams.get("min_age")).toBe("24h");
+    expect(url!.searchParams.get("dry_run")).toBe("true");
+    expect(resp.dry_run).toBe(true);
+    expect(resp.min_age).toBe("24h0m0s");
+    expect(resp.removed).toHaveLength(1);
+  });
+});

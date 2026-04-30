@@ -516,10 +516,39 @@ export class Client {
     );
   }
 
-  /** POST /v1/admin/cleanup-orphans */
-  async cleanupOrphans(opts: RequestOptions = {}): Promise<CleanupOrphansResponse> {
+  /**
+   * `POST /v1/admin/cleanup-orphans` — admin-only.
+   *
+   * Sweeps stale compaction artifacts (`*.old` / `*.compact` / `*.backup`
+   * / `*.failed`) and pre-reembed snapshots
+   * (`*.pre-reembed.<timestamp>`) from every tenant's data tree.
+   *
+   * @param minAge Go-style duration string controlling the minimum age
+   *   before an artifact is eligible for removal (e.g. `"1h"`, `"24h"`,
+   *   `"30m"`). Empty string `""` uses the server default (1h). The
+   *   server enforces a 5-minute floor — passing a smaller positive
+   *   value yields HTTP 400.
+   * @param dryRun When `true`, the server enumerates what *would* have
+   *   been removed without touching disk.
+   */
+  async cleanupOrphans(
+    minAge: string = "",
+    dryRun: boolean = false,
+    opts: RequestOptions = {},
+  ): Promise<CleanupOrphansResponse> {
+    const query: Record<string, string> = {};
+    if (minAge) {
+      query.min_age = minAge;
+    }
+    if (dryRun) {
+      query.dry_run = "true";
+    }
     return this.send<CleanupOrphansResponse>(
-      { method: "POST", path: "/v1/admin/cleanup-orphans" },
+      {
+        method: "POST",
+        path: "/v1/admin/cleanup-orphans",
+        ...(Object.keys(query).length > 0 ? { query } : {}),
+      },
       opts,
     );
   }
