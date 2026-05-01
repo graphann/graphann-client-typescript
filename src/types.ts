@@ -319,6 +319,26 @@ export interface SearchRequest {
   vector?: number[];
   k?: number;
   filter?: SearchFilter;
+  /**
+   * Enable cross-encoder reranking of the top-`candidate_k` HNSW
+   * candidates. Effective only when the server has a reranker
+   * configured (via `--reranker-url`) AND `query` is supplied —
+   * vector-only requests have no text to feed the cross-encoder.
+   * No-op against servers without a reranker, so safe to set
+   * unconditionally. Defaults to `false`.
+   */
+  rerank?: boolean;
+  /**
+   * First-stage candidate pool size fed to the reranker. Effective
+   * only when `rerank` is true. Omit (or `0`) to use the server
+   * default of `max(4*k, 50)`. The server clamps to `[k, 1000]`.
+   */
+  candidate_k?: number;
+  /**
+   * Number of results to return AFTER reranking. Effective only when
+   * `rerank` is true. Omit (or `0`) to default to `k`.
+   */
+  rerank_k?: number;
   /** Tenant override when not set on the client. */
   tenantId?: TenantID;
 }
@@ -326,7 +346,19 @@ export interface SearchRequest {
 export interface SearchResult {
   id: string;
   text?: string;
+  /**
+   * First-stage cosine similarity (higher is better). Always
+   * populated, regardless of whether reranking ran.
+   */
   score: number;
+  /**
+   * Cross-encoder relevance score, in the reranker's native scale
+   * (typically roughly -10..10 for bge-reranker-v2-m3). Present only
+   * when the server actually applied the reranker to this entry.
+   * When set, the result ordering reflects this field; when absent,
+   * ordering is by `score`.
+   */
+  rerank_score?: number;
   metadata?: unknown;
 }
 

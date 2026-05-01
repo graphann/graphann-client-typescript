@@ -591,6 +591,9 @@ export class Client {
     if (req.vector !== undefined) body.vector = req.vector;
     if (req.k !== undefined) body.k = req.k;
     if (req.filter !== undefined) body.filter = req.filter;
+    if (req.rerank !== undefined) body.rerank = req.rerank;
+    if (req.candidate_k !== undefined) body.candidate_k = req.candidate_k;
+    if (req.rerank_k !== undefined) body.rerank_k = req.rerank_k;
     return this.send<SearchResponse>(
       {
         method: "POST",

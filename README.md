@@ -44,6 +44,27 @@ const results = await client.search({
   k: 10,
 });
 
+// Optional cross-encoder reranking. No-op against servers without
+// a `--reranker-url` configured; safe to set unconditionally.
+const reranked = await client.search({
+  indexId: "i_...",
+  query: "what does the standard say about audit trails?",
+  k: 10,
+  rerank: true,        // opt in per query
+  candidate_k: 50,     // HNSW pool fed to reranker (default max(4*k, 50))
+  rerank_k: 10,        // post-rerank result count (default k)
+});
+for (const hit of reranked.results) {
+  // hit.score is always the cosine similarity. hit.rerank_score is
+  // defined only when the server actually reranked this entry — and
+  // when set, it drives the result ordering.
+  if (hit.rerank_score !== undefined) {
+    console.log(`${hit.id}: rerank=${hit.rerank_score.toFixed(3)} cosine=${hit.score.toFixed(3)}`);
+  } else {
+    console.log(`${hit.id}: cosine=${hit.score.toFixed(3)}`);
+  }
+}
+
 // Cursor pagination as async iterator
 for await (const page of client.listDocuments({ indexId: "i_..." })) {
   for (const doc of page.items) {
