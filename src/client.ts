@@ -17,6 +17,7 @@ import {
 import { Paginator } from "./pagination.js";
 import { SingleFlight, stableHash } from "./singleflight.js";
 import type {
+  AddDocumentsRequest,
   AddDocumentsResponse,
   APIKey,
   BulkDeleteByExternalIdsResponse,
@@ -38,6 +39,7 @@ import type {
   DeleteLLMSettingsResponse,
   DeleteTenantResponse,
   Document,
+  FlushIndexResponse,
   GetDocumentResponse,
   HealthResponse,
   IndexID,
@@ -62,6 +64,7 @@ import type {
   Page,
   PendingStatusResponse,
   ProcessPendingResponse,
+  RebuildGraphResponse,
   RequestOptions,
   SearchRequest,
   SearchResponse,
@@ -236,8 +239,13 @@ export class Client {
   /**
    * POST /v1/tenants/{tid}/indexes/{iid}/compact
    *
-   * Throws `ConflictError` (HTTP 409) when a compaction is already running.
-   * Callers should catch and retry after a back-off.
+   * Returns `200 OK` with `status: "compacting"` — compaction runs
+   * asynchronously; this endpoint provides no poll, observe completion
+   * via live-stats/logs. Throws `ConflictError` (HTTP 409) when a
+   * compaction is already running. Callers should catch and retry after
+   * a back-off. (The transport sends `{}` with
+   * `Content-Type: application/json` — the server's middleware requires
+   * the header on every mutating verb, body-less POSTs included.)
    */
   async compactIndex(
     indexId: IndexID,
@@ -260,6 +268,47 @@ export class Client {
       {
         method: "POST",
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/clear`,
+      },
+      opts,
+    );
+  }
+
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/flush
+   *
+   * Persists the live index's in-memory delta. Any pending bulk-deferred
+   * HNSW graph (see `AddDocumentsRequest.bulk`) is built once —
+   * concurrently — inside the flush and persisted with it. Pairs with
+   * `defer_save`/`bulk` ingest; safe to call on a clean index.
+   */
+  async flushIndex(indexId: IndexID, opts: RequestOptions = {}): Promise<FlushIndexResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<FlushIndexResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/flush`,
+      },
+      opts,
+    );
+  }
+
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/rebuild-graph
+   *
+   * In-place delta-HNSW rebuild — migration endpoint for indexes
+   * ingested before the 2026-06 neighbor-selection fix (fragmented
+   * graphs). Throws `ConflictError` (HTTP 409) while a compaction is in
+   * progress.
+   */
+  async rebuildGraph(
+    indexId: IndexID,
+    opts: RequestOptions = {},
+  ): Promise<RebuildGraphResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<RebuildGraphResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/rebuild-graph`,
       },
       opts,
     );
@@ -382,18 +431,31 @@ export class Client {
   // Documents
   // -------------------------------------------------------------------------
 
-  /** POST /v1/tenants/{tid}/indexes/{iid}/documents */
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/documents
+   *
+   * Accepts either a plain `Document[]` (unchanged behavior) or a full
+   * `AddDocumentsRequest` to set the `defer_save` / `bulk` ingest
+   * options. Per-document `vector` enables precomputed-vector ingest —
+   * all-or-nothing per batch (see `Document.vector`). Request bodies are
+   * capped at 16 MB server-side (throws `PayloadTooLargeError`), which
+   * caps precomputed batches at roughly 1700 documents.
+   */
   async addDocuments(
     indexId: IndexID,
-    documents: Document[],
+    documents: Document[] | AddDocumentsRequest,
     opts: RequestOptions = {},
   ): Promise<AddDocumentsResponse> {
     const tenantId = this.requireTenant(opts);
+    const req: AddDocumentsRequest = Array.isArray(documents) ? { documents } : documents;
+    const body: Record<string, unknown> = { documents: req.documents };
+    if (req.defer_save !== undefined) body.defer_save = req.defer_save;
+    if (req.bulk !== undefined) body.bulk = req.bulk;
     return this.send<AddDocumentsResponse>(
       {
         method: "POST",
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/documents`,
-        body: { documents },
+        body,
       },
       opts,
     );
@@ -594,6 +656,7 @@ export class Client {
     if (req.rerank !== undefined) body.rerank = req.rerank;
     if (req.candidate_k !== undefined) body.candidate_k = req.candidate_k;
     if (req.rerank_k !== undefined) body.rerank_k = req.rerank_k;
+    if (req.ef_search !== undefined) body.ef_search = req.ef_search;
     return this.send<SearchResponse>(
       {
         method: "POST",

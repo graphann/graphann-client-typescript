@@ -398,6 +398,51 @@ describe("Search request building", () => {
     expect(captured).toEqual({ vector: [0.1, 0.2], k: 5 });
   });
 
+  it("sends ef_search in search body", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ results: [], total: 0 });
+      }),
+    );
+    await newClient().search({ indexId: "i_x", query: "hello", k: 3, ef_search: 256 });
+    expect(captured).toEqual({ query: "hello", k: 3, ef_search: 256 });
+  });
+
+  it("decodes the optional sharded-path response fields", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, () =>
+        HttpResponse.json({
+          results: [{ id: "doc-1", score: 0.9 }],
+          total: 1,
+          partial: true,
+          shards_total: 4,
+          shards_ok: 3,
+          degraded_shards: ["shard-2"],
+        }),
+      ),
+    );
+    const r = await newClient().search({ indexId: "i_x", query: "hello" });
+    expect(r.partial).toBe(true);
+    expect(r.shards_total).toBe(4);
+    expect(r.shards_ok).toBe(3);
+    expect(r.degraded_shards).toEqual(["shard-2"]);
+  });
+
+  it("leaves sharded-path fields undefined on local responses", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, () =>
+        HttpResponse.json({ results: [], total: 0 }),
+      ),
+    );
+    const r = await newClient().search({ indexId: "i_x", query: "hello" });
+    expect(r.partial).toBeUndefined();
+    expect(r.shards_total).toBeUndefined();
+    expect(r.shards_ok).toBeUndefined();
+    expect(r.degraded_shards).toBeUndefined();
+  });
+
   it("sends filter.equals in search body", async () => {
     let captured: unknown = null;
     server.use(
@@ -502,6 +547,125 @@ describe("createIndex with compression and approximate", () => {
   });
 });
 
+describe("updateIndex", () => {
+  it("PATCHes compression and returns the updated index", async () => {
+    let captured: unknown = null;
+    let method = "";
+    server.use(
+      http.patch(`${BASE}/v1/tenants/t_default/indexes/i_x`, async ({ request }) => {
+        method = request.method;
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "i_x",
+          tenant_id: "t_default",
+          name: "demo",
+          status: "ready",
+          num_docs: 10,
+          num_chunks: 40,
+          dimension: 384,
+          created_at: "2026-06-01T00:00:00Z",
+          updated_at: "2026-06-10T00:00:00Z",
+          compression: "scalar",
+        });
+      }),
+    );
+    const idx = await newClient().updateIndex("i_x", { compression: "scalar" });
+    expect(method).toBe("PATCH");
+    expect(captured).toEqual({ compression: "scalar" });
+    expect(idx.compression).toBe("scalar");
+  });
+});
+
+describe("compactIndex", () => {
+  it("POSTs {} with Content-Type: application/json and decodes the 200 body", async () => {
+    let contentType: string | null = null;
+    let rawBody = "";
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/compact`,
+        async ({ request }) => {
+          contentType = request.headers.get("content-type");
+          rawBody = await request.text();
+          return HttpResponse.json({
+            index_id: "i_x",
+            status: "compacting",
+            message: "Index compaction started",
+          });
+        },
+      ),
+    );
+    const r = await newClient().compactIndex("i_x");
+    expect(contentType).toBe("application/json");
+    expect(rawBody).toBe("{}");
+    expect(r.status).toBe("compacting");
+  });
+
+  it("throws ConflictError while a compaction is in flight", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/compact`, () =>
+        HttpResponse.json(
+          { error: { code: "conflict", message: "compaction already in progress for this index" } },
+          { status: 409 },
+        ),
+      ),
+    );
+    await expect(newClient().compactIndex("i_x")).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("flushIndex", () => {
+  it("POSTs /flush with a JSON content-type and decodes {flushed:true}", async () => {
+    let contentType: string | null = null;
+    let path = "";
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/flush`,
+        ({ request }) => {
+          contentType = request.headers.get("content-type");
+          path = new URL(request.url).pathname;
+          return HttpResponse.json({ flushed: true });
+        },
+      ),
+    );
+    const r = await newClient().flushIndex("i_x");
+    expect(path).toBe("/v1/tenants/t_default/indexes/i_x/flush");
+    expect(contentType).toBe("application/json");
+    expect(r.flushed).toBe(true);
+  });
+});
+
+describe("rebuildGraph", () => {
+  it("POSTs /rebuild-graph and decodes the response", async () => {
+    let path = "";
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/rebuild-graph`,
+        ({ request }) => {
+          path = new URL(request.url).pathname;
+          return HttpResponse.json({ rebuilt: true, chunks: 52000, wall_ms: 1234 });
+        },
+      ),
+    );
+    const r = await newClient().rebuildGraph("i_x");
+    expect(path).toBe("/v1/tenants/t_default/indexes/i_x/rebuild-graph");
+    expect(r.rebuilt).toBe(true);
+    expect(r.chunks).toBe(52000);
+    expect(r.wall_ms).toBe(1234);
+  });
+
+  it("throws ConflictError while compaction is in progress", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/rebuild-graph`, () =>
+        HttpResponse.json(
+          { error: { code: "conflict", message: "compaction in progress" } },
+          { status: 409 },
+        ),
+      ),
+    );
+    await expect(newClient().rebuildGraph("i_x")).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
 describe("Document operations", () => {
   it("addDocuments wraps the array in `documents`", async () => {
     let captured: unknown = null;
@@ -521,6 +685,67 @@ describe("Document operations", () => {
     const r = await newClient().addDocuments("i_x", docs);
     expect(captured).toEqual({ documents: docs });
     expect(r.added).toBe(2);
+  });
+
+  it("addDocuments accepts an AddDocumentsRequest with defer_save and bulk", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
+        async ({ request }) => {
+          captured = await request.json();
+          return HttpResponse.json(
+            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
+            { status: 201 },
+          );
+        },
+      ),
+    );
+    const docs = [{ text: "a" }];
+    await newClient().addDocuments("i_x", { documents: docs, defer_save: true, bulk: true });
+    expect(captured).toEqual({ documents: docs, defer_save: true, bulk: true });
+  });
+
+  it("addDocuments passes per-document vectors through (precomputed ingest)", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
+        async ({ request }) => {
+          captured = await request.json();
+          return HttpResponse.json(
+            { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
+            { status: 201 },
+          );
+        },
+      ),
+    );
+    const docs = [
+      { id: "ext-1", text: "a", vector: [0.1, 0.2] },
+      { id: "ext-2", text: "b", vector: [0.3, 0.4] },
+    ];
+    await newClient().addDocuments("i_x", docs);
+    expect(captured).toEqual({ documents: docs });
+  });
+
+  it("addDocuments decodes external_ids when the server minted IDs", async () => {
+    server.use(
+      http.post(
+        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
+        () =>
+          HttpResponse.json(
+            {
+              added: 2,
+              index_id: "i_x",
+              chunk_ids: ["chunk-0", "chunk-1"],
+              external_ids: ["minted-1", "client-2"],
+            },
+            { status: 201 },
+          ),
+      ),
+    );
+    const r = await newClient().addDocuments("i_x", [{ text: "a" }, { id: "client-2", text: "b" }]);
+    expect(r.external_ids).toEqual(["minted-1", "client-2"]);
   });
 
   it("bulkDeleteDocuments sends DELETE with body", async () => {

@@ -4,6 +4,74 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.7.0 - 2026-06-10
+
+### Added
+
+- `Document.vector?: number[]` — precomputed-vector ingest. When every
+  document in an `addDocuments` batch carries a non-empty `vector`, the
+  server skips embedding and ingests the vectors as-is. All-or-nothing
+  per batch: mixed batches (some with, some without) are rejected with
+  a 400. Vector length must match the index dimension once fixed; the
+  first ingest into a fresh index fixes it. The 16 MB request-body cap
+  limits precomputed batches to roughly 1700 documents.
+- `Client.addDocuments` now also accepts a full `AddDocumentsRequest`
+  (`{ documents, defer_save?, bulk? }`) in place of the plain
+  `Document[]`. `defer_save: true` skips the per-batch save (data stays
+  searchable; persist via `flushIndex`). `bulk: true` implies
+  `defer_save` and defers the HNSW graph build until flush — bulk data
+  is not searchable until then, except that the first search against a
+  pending deferred build transparently triggers it (build-on-read).
+  Existing `Document[]` call sites are unchanged.
+- `Client.flushIndex(indexId)` — `POST .../indexes/{id}/flush`.
+  Persists the live index's in-memory delta; any pending bulk-deferred
+  graph is built once, concurrently, inside the flush. Returns
+  `FlushIndexResponse` (`{ flushed: true }`).
+- `Client.rebuildGraph(indexId)` — `POST .../indexes/{id}/rebuild-graph`.
+  In-place delta-HNSW rebuild for indexes ingested before the 2026-06
+  neighbor-selection fix. Returns `RebuildGraphResponse`
+  (`{ rebuilt, chunks, wall_ms }`); throws `ConflictError` while a
+  compaction is in progress.
+- `SearchRequest.ef_search?: number` — per-query HNSW beam width.
+  Omitted/`0` uses the server default (`--search-ef`, default 64). The
+  server clamps rather than rejects: negative falls back to the
+  default, values above 2000 are capped. Binary/PQ flat scans ignore
+  it.
+- `SearchResponse` gains optional sharded-path fields: `partial?`,
+  `shards_total?`, `shards_ok?` (always present on the sharded path)
+  and `degraded_shards?: string[]` (only when non-empty). Single-node
+  and unsharded deployments keep the byte-identical `{results, total}`
+  response — treat all four as optional. Note: `rerank`/`candidate_k`/
+  `rerank_k` are NOT applied on the sharded path, and results are
+  deduped by external ID keeping the highest score.
+- `AddDocumentsResponse.external_ids?: string[]` — present only when
+  the server minted at least one external ID (sharded ingest of ID-less
+  documents); positionally aligned with the request array and includes
+  client-supplied IDs too. Persist these as the durable document IDs.
+- New types exported: `FlushIndexResponse`, `RebuildGraphResponse`.
+
+### Fixed
+
+- Body-less mutating requests (`compactIndex`, `clearIndex`,
+  `processPending`, `runIndexGC`, `runAdminGC`, `cleanupOrphans`, and
+  the new `flushIndex` / `rebuildGraph`) now send an empty JSON object
+  `{}` with `Content-Type: application/json`. The server's content-type
+  middleware rejects every POST without the header (400), so these
+  calls previously failed against current servers. DELETE without a
+  body is exempt and stays body-less.
+
+### Changed
+
+- `UpdateIndexRequest.compression` docs now spell out the server
+  semantics: the change is metadata-only (applies at the next
+  compaction, no rebuild); `""` and `"none"` both fold to the server's
+  `--default-compression`; invalid values currently surface as a 500
+  `ServerError`, not a 400.
+- `compactIndex` docs clarify the server returns `200 OK` with
+  `status: "compacting"` (compaction is asynchronous; no poll endpoint
+  — observe completion via live-stats/logs).
+- `SDK_VERSION` bumped to `"0.7.0"` (was lagging at `"0.4.0"`).
+
 ## 0.6.0 - 2026-05-01
 
 ### Added

@@ -174,6 +174,14 @@ async function doFetch<T>(
     } else {
       body = json;
     }
+  } else if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
+    // The server's ContentTypeMiddleware requires `Content-Type:
+    // application/json` on every mutating verb — body-less POSTs included
+    // (compact, flush, process, gc, cleanup-orphans). Send an empty JSON
+    // object so the header is always present and valid. DELETE without a
+    // body is exempt server-side and stays body-less.
+    headers["content-type"] = "application/json";
+    body = "{}";
   }
 
   let response: Response;

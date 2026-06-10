@@ -1,8 +1,8 @@
 {
   "name": "@graphann/client",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Official TypeScript client SDK for GraphANN — storage-efficient vector database",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "GraphANN",
   "homepage": "https://graphann.com",
   "repository": {

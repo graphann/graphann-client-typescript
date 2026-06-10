@@ -92,7 +92,16 @@ export interface CreateIndexRequest {
 export interface UpdateIndexRequest {
   name?: string;
   description?: string;
+  /**
+   * New compression mode, persisted as metadata only — no immediate
+   * rebuild; it takes effect at the next compaction. Note that `""` and
+   * `"none"` both fold to the server's `--default-compression` (since
+   * server 2026-04-30); `"none"` is not a per-index opt-out unless the
+   * server runs `--default-compression=none`. Invalid values currently
+   * surface as a 500 `ServerError` (not a 400) — server-side quirk.
+   */
   compression?: CompressionType;
+  /** Propagates immediately to a loaded live index. */
   approximate?: boolean;
 }
 
@@ -152,10 +161,34 @@ export interface Document {
   repo_id?: string;
   file_path?: string;
   commit_sha?: string;
+  /**
+   * Optional precomputed embedding — the server skips embedding and
+   * ingests it as-is. All-or-nothing per batch: EVERY document must
+   * carry a non-empty `vector`, or none may (mixed batches are rejected
+   * with a 400). Length must match the index dimension once fixed; a
+   * fresh index accepts any length and the first ingest fixes it.
+   * Precomputed inserts are idempotent by external ID (upsert), so the
+   * per-document `upsert` pre-delete is not run on this path.
+   */
+  vector?: number[];
 }
 
 export interface AddDocumentsRequest {
   documents: Document[];
+  /**
+   * Skip the per-batch save. Data stays in memory (index dirty) but is
+   * STILL searchable; persist later via `Client.flushIndex`. Can also be
+   * forced server-side with the `?defer_save=` query param.
+   */
+  defer_save?: boolean;
+  /**
+   * Implies `defer_save` AND defers the per-node HNSW insert — the delta
+   * graph is built once, concurrently, at flush. Bulk-ingested data is
+   * NOT searchable until the graph is built; as a safety net the first
+   * search against a pending deferred build transparently triggers it
+   * (build-on-read), so searches never silently miss bulk data.
+   */
+  bulk?: boolean;
 }
 
 export interface AddDocumentsResponse {
@@ -163,6 +196,27 @@ export interface AddDocumentsResponse {
   index_id: IndexID;
   // Server emits []store.ChunkID (= []string) UUIDs, not numbers.
   chunk_ids: string[];
+  /**
+   * One entry per submitted document, positionally aligned with the
+   * request array. Present only when the server minted at least one
+   * external ID (sharded ingest of ID-less documents — the external ID
+   * is the shard routing key); when present it includes client-supplied
+   * IDs too. Persist these as the durable document IDs. Unsharded
+   * ingests never mint, so the field is absent there.
+   */
+  external_ids?: string[];
+}
+
+/** Body returned by `POST .../indexes/{id}/flush`. */
+export interface FlushIndexResponse {
+  flushed: boolean;
+}
+
+/** Body returned by `POST .../indexes/{id}/rebuild-graph`. */
+export interface RebuildGraphResponse {
+  rebuilt: boolean;
+  chunks: number;
+  wall_ms: number;
 }
 
 export interface ImportDocumentsResponse {
@@ -339,6 +393,14 @@ export interface SearchRequest {
    * `rerank` is true. Omit (or `0`) to default to `k`.
    */
   rerank_k?: number;
+  /**
+   * Per-query HNSW beam width. Omit (or `0`) to use the server default
+   * (`--search-ef`, default 64). The server clamps rather than rejects:
+   * negative values fall back to the default, values above 2000 are
+   * capped. Mode-local floors may raise the effective ef (scalar-quant
+   * and guided-recompute paths); binary/PQ flat scans ignore it.
+   */
+  ef_search?: number;
   /** Tenant override when not set on the client. */
   tenantId?: TenantID;
 }
@@ -365,6 +427,20 @@ export interface SearchResult {
 export interface SearchResponse {
   results: SearchResult[];
   total: number;
+  /**
+   * Sharded-search metadata. The next four fields appear ONLY on the
+   * sharded path (cluster search wired AND the index has more than one
+   * shard); single-node and unsharded deployments return only
+   * `results`/`total`. `partial` is true whenever at least one shard
+   * contributed nothing. Note: `rerank`/`candidate_k`/`rerank_k` are NOT
+   * applied on the sharded path, and results are deduped by external ID
+   * keeping the highest score.
+   */
+  partial?: boolean;
+  shards_total?: number;
+  shards_ok?: number;
+  /** Degraded shard IDs; present only when non-empty. */
+  degraded_shards?: string[];
 }
 
 // Multi-source / org-level search.
