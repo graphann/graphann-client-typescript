@@ -618,31 +618,38 @@ export interface DeleteLLMSettingsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// API keys (forward-looking; server route may not yet exist)
+// API keys
 // ---------------------------------------------------------------------------
 
+/** Response from creating an API key. The `plaintext` secret is returned ONCE. */
 export interface APIKey {
   id: string;
-  tenant_id: TenantID;
   name: string;
-  prefix?: string;
-  /** Only returned on creation; full secret is never re-readable. */
-  secret?: string;
-  role?: string;
+  user_id?: string;
+  /** The full key secret. Returned only on creation and never re-readable. */
+  plaintext: string;
+  created_at: string;
+}
+
+/** An entry in the list-keys response. Never includes the plaintext secret. */
+export interface APIKeyListItem {
+  id: string;
+  user_id?: string;
+  name: string;
   created_at: string;
   last_used_at?: string;
-  revoked_at?: string;
 }
 
 export interface CreateAPIKeyRequest {
+  /** Optional user the key is scoped to. Empty/omitted is allowed. */
+  user_id?: string;
+  /** The key's label. */
   name: string;
-  role?: string;
   tenantId?: TenantID;
 }
 
 export interface ListAPIKeysResponse {
-  api_keys: APIKey[];
-  total: number;
+  api_keys: APIKeyListItem[];
 }
 
 // ---------------------------------------------------------------------------

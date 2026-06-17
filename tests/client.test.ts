@@ -1169,3 +1169,90 @@ describe("cleanupOrphans", () => {
     expect(resp.removed).toHaveLength(1);
   });
 });
+
+describe("API keys", () => {
+  it("createAPIKey sends { name, user_id } and parses the one-time plaintext", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/api-keys`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          {
+            id: "key_1",
+            name: "ci-runner",
+            user_id: "u_1",
+            plaintext: "ak_live_secret_value",
+            created_at: "2026-06-17T00:00:00Z",
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const key = await newClient().createAPIKey({ name: "ci-runner", user_id: "u_1" });
+    expect(captured).toEqual({ name: "ci-runner", user_id: "u_1" });
+    expect(key.id).toBe("key_1");
+    expect(key.name).toBe("ci-runner");
+    expect(key.user_id).toBe("u_1");
+    // The one-time secret is decoded from the "plaintext" json field.
+    expect(key.plaintext).toBe("ak_live_secret_value");
+    expect(key.created_at).toBe("2026-06-17T00:00:00Z");
+  });
+
+  it("createAPIKey omits user_id from the body when not supplied", async () => {
+    let captured: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/api-keys`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          { id: "key_2", name: "no-user", plaintext: "ak_x", created_at: "2026-06-17T00:00:00Z" },
+          { status: 201 },
+        );
+      }),
+    );
+    await newClient().createAPIKey({ name: "no-user" });
+    expect(captured).toEqual({ name: "no-user" });
+  });
+
+  it("listAPIKeys parses the api_keys wrapper and item fields", async () => {
+    server.use(
+      http.get(`${BASE}/v1/tenants/t_default/api-keys`, () =>
+        HttpResponse.json({
+          api_keys: [
+            {
+              id: "key_1",
+              user_id: "u_1",
+              name: "ci-runner",
+              created_at: "2026-06-17T00:00:00Z",
+              last_used_at: "2026-06-17T01:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+    const resp = await newClient().listAPIKeys();
+    expect(resp.api_keys).toHaveLength(1);
+    const item = resp.api_keys[0]!;
+    expect(item.id).toBe("key_1");
+    expect(item.user_id).toBe("u_1");
+    expect(item.name).toBe("ci-runner");
+    expect(item.created_at).toBe("2026-06-17T00:00:00Z");
+    expect(item.last_used_at).toBe("2026-06-17T01:00:00Z");
+    // List items never carry the secret.
+    expect((item as unknown as Record<string, unknown>)["plaintext"]).toBeUndefined();
+  });
+
+  it("revokeAPIKey issues DELETE on the key path", async () => {
+    let method = "";
+    let path = "";
+    server.use(
+      http.delete(`${BASE}/v1/tenants/t_default/api-keys/key_1`, ({ request }) => {
+        method = request.method;
+        path = new URL(request.url).pathname;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await newClient().revokeAPIKey("key_1");
+    expect(method).toBe("DELETE");
+    expect(path).toBe("/v1/tenants/t_default/api-keys/key_1");
+  });
+});

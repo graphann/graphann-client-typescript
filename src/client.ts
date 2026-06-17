@@ -879,19 +879,13 @@ export class Client {
 
   // -------------------------------------------------------------------------
   // API keys
-  //
-  // These call routes the GraphANN server has not yet shipped (the auth
-  // middleware reads keys but no HTTP CRUD exists at the time of writing).
-  // Methods are kept on the public surface so application code can compile
-  // ahead of the server-side rollout — calls will surface a NotFoundError
-  // until the routes land.
   // -------------------------------------------------------------------------
 
   /** POST /v1/tenants/{tid}/api-keys */
   async createAPIKey(req: CreateAPIKeyRequest, opts: RequestOptions = {}): Promise<APIKey> {
     const tenantId = req.tenantId ?? this.requireTenant(opts);
     const body: Record<string, unknown> = { name: req.name };
-    if (req.role !== undefined) body.role = req.role;
+    if (req.user_id !== undefined) body.user_id = req.user_id;
     return this.send<APIKey>(
       {
         method: "POST",

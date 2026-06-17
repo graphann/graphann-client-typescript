@@ -4,6 +4,35 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## v0.8.0 - 2026-06-17
+
+### Fixed
+
+- API-key wire contract corrected to match the server
+  (`internal/server/apikey_handlers.go`):
+  - The create-key response one-time secret is decoded from the
+    `plaintext` json field (was `secret`, which silently dropped the key).
+  - The list-keys response wrapper key is `api_keys` (was `keys`).
+  - `createAPIKey` now sends `{ user_id, name }` (the `role` field was
+    removed; `user_id` was missing).
+  - `APIKey` is the create response (`id`, `name`, `user_id?`,
+    `plaintext`, `created_at`). The list returns `APIKeyListItem`
+    entries (`id`, `user_id?`, `name`, `created_at`, `last_used_at?`).
+  - Removed invented fields that the server does not emit: `secret`,
+    `prefix`, `role`, `revoked_at`, and the `total` count on the list
+    response.
+
+  This is mildly breaking for code that read the old struct fields
+  (`APIKey.secret`/`prefix`/`role`/`revoked_at`,
+  `ListAPIKeysResponse.total`, or iterated `APIKey[]` from the list).
+  Read `APIKey.plaintext` on creation and `APIKeyListItem` fields when
+  listing.
+
+### Added
+
+- `AGENTS.md` — an LLM-usage guide for coding agents, grounded in the
+  current SDK surface.
+
 ## 0.7.0 - 2026-06-10
 
 ### Added

@@ -49,17 +49,17 @@ async function main(): Promise<void> {
   );
   console.log(`Index: ${index.id}`);
 
-  // 4. Mint an API key. Best-effort — the route may not yet exist on this
-  //    server build; surface the failure but keep going.
+  // 4. Mint an API key. The plaintext secret is returned ONCE on creation
+  //    and is never re-readable, so capture it here.
   try {
     const key = await client.createAPIKey(
-      { name: "quickstart", role: "Editor" },
+      { name: "quickstart", user_id: "u_quickstart" },
       { tenantId: tenant.id },
     );
-    console.log(`API key: ${key.secret ?? "(none)"} prefix=${key.prefix ?? "(none)"}`);
+    console.log(`API key id=${key.id} plaintext=${key.plaintext}`);
   } catch (err) {
     if (err instanceof GraphANNError) {
-      console.warn(`createAPIKey not available on this server: ${err.message}`);
+      console.warn(`createAPIKey failed: ${err.message}`);
     } else {
       throw err;
     }

@@ -31,6 +31,7 @@ export type {
   AddDocumentsRequest,
   AddDocumentsResponse,
   APIKey,
+  APIKeyListItem,
   BulkDeleteByExternalIdsResponse,
   BulkDeleteDocumentsResponse,
   ChunkResponse,
