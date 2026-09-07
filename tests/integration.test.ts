@@ -38,31 +38,27 @@ describeOrSkip("integration: live GraphANN server", () => {
     const tenantName = `sdk-test-${Date.now()}`;
     const tenant = await client.createTenant({ name: tenantName });
     expect(tenant.id).toMatch(/^t_/);
+    const tenantId = tenant.id;
+    if (!tenantId) throw new Error("createTenant did not return an id");
 
-    const index = await client.createIndex(
-      { name: "ts-sdk" },
-      { tenantId: tenant.id },
-    );
+    const index = await client.createIndex({ name: "ts-sdk" }, { tenantId });
     expect(index.id).toMatch(/^i_/);
+    const indexId = index.id;
+    if (!indexId) throw new Error("createIndex did not return an id");
 
     const ingestDocs = Array.from({ length: 5 }, (_, i) => ({
       id: `doc-${i}`,
       text: `Document number ${i} talking about machine learning.`,
     }));
-    const added = await client.addDocuments(index.id, ingestDocs, {
-      tenantId: tenant.id,
-    });
+    const added = await client.addDocuments(indexId, ingestDocs, { tenantId });
     expect(added.added).toBe(5);
 
     // Give the server a moment to embed and index.
     await new Promise((r) => setTimeout(r, 1_000));
 
-    const r = await client.search(
-      { indexId: index.id, query: "machine learning", k: 3 },
-      { tenantId: tenant.id },
-    );
+    const r = await client.search({ indexId, query: "machine learning", k: 3 }, { tenantId });
     expect(Array.isArray(r.results)).toBe(true);
 
-    await client.deleteTenant(tenant.id);
+    await client.deleteTenant(tenantId);
   }, 30_000);
 });

@@ -8,8 +8,6 @@
  * Sensitive fields (API keys, tokens) are NEVER included in error messages.
  */
 
-import type { ServerErrorEnvelope } from "./types.js";
-
 /** Common context attached to most SDK errors. */
 export interface GraphANNErrorOptions {
   /** Server-provided error code (e.g. `"validation_error"`, `"not_found"`). */
@@ -112,8 +110,21 @@ export class UnexpectedStatusError extends GraphANNError {
   }
 }
 
+/**
+ * Parsed shape of `ServerErrorEnvelope["error"]`, but with `code` widened to
+ * `string`: this function parses untrusted response bodies at runtime, and a
+ * server sending a code outside the spec's known enum (a new release, a
+ * proxy-injected error) must not crash parsing — only `errorFromResponse`'s
+ * `switch` cares about the known values.
+ */
+export interface ParsedServerError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
 /** Internal: parse the standard server error envelope, never throws. */
-export function parseErrorEnvelope(payload: unknown): ServerErrorEnvelope["error"] | null {
+export function parseErrorEnvelope(payload: unknown): ParsedServerError | null {
   if (!payload || typeof payload !== "object") return null;
   const env = payload as { error?: unknown };
   if (!env.error || typeof env.error !== "object") return null;

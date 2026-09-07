@@ -32,7 +32,8 @@ export interface ClientOptions {
 
   /**
    * Compress request bodies with gzip when their size exceeds this threshold,
-   * in bytes. `0` disables. Default: `65536`.
+   * in bytes. `0` disables (the default). Enable only when the server or proxy
+   * supports gzip request decoding.
    */
   gzipThreshold?: number;
 
@@ -87,7 +88,7 @@ export interface ResolvedClientOptions {
 }
 
 /** SDK version. Update on every release. */
-export const SDK_VERSION = "0.8.0";
+export const SDK_VERSION = "0.9.1";
 
 /** Best-effort runtime/platform detection for the User-Agent string. */
 function detectRuntime(): { runtime: string; platform: string } {
@@ -157,7 +158,7 @@ export function resolveOptions(options: ClientOptions): ResolvedClientOptions {
     maxRetries: options.maxRetries ?? 3,
     initialBackoff: options.initialBackoff ?? 250,
     maxBackoff: options.maxBackoff ?? 15_000,
-    gzipThreshold: options.gzipThreshold ?? 64 * 1024,
+    gzipThreshold: options.gzipThreshold ?? 0,
     userAgent: buildUserAgent(options.userAgent),
     singleflight: options.singleflight ?? true,
     cache: options.cache ?? false,

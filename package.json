@@ -1,6 +1,6 @@
 {
   "name": "@graphann/client",
-  "version": "0.8.0",
+  "version": "0.9.1",
   "description": "Official TypeScript client SDK for GraphANN — storage-efficient vector database",
   "license": "SEE LICENSE IN LICENSE",
   "author": "GraphANN",
@@ -48,6 +48,9 @@
   "scripts": {
     "build": "tsup",
     "build:clean": "rm -rf dist && pnpm build",
+    "gen:types": "node scripts/gen-types.mjs",
+    "gen:types:check": "node scripts/gen-types.mjs --check",
+    "pretest": "pnpm run gen:types:check",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -3,7 +3,7 @@
  * stable, so re-inserting on access gives us LRU semantics for free.
  *
  * The cache is opt-in (disabled by default in `ClientOptions`). When enabled,
- * only safe, idempotent reads (GET) are cached.
+ * only safe, idempotent reads (including search POSTs) are cached.
  */
 
 interface CacheEntry<V> {

@@ -13,12 +13,10 @@ vector database.
 
 ## Install
 
+Install the built package from the GitHub release:
+
 ```bash
-pnpm add @graphann/client
-# or
-npm install @graphann/client
-# or
-yarn add @graphann/client
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.9.1/graphann-client-0.9.1.tgz
 ```
 
 ## Quickstart
@@ -65,7 +63,8 @@ for (const hit of reranked.results) {
   }
 }
 
-// Cursor pagination as async iterator
+// listDocuments(args: ListDocumentsOptions, opts?: RequestOptions)
+// Cursor pagination takes an options object and yields pages with `items`.
 for await (const page of client.listDocuments({ indexId: "i_..." })) {
   for (const doc of page.items) {
     console.log(doc.id);
@@ -92,7 +91,7 @@ new Client({
   maxRetries: 3,           // 0 disables retries
   initialBackoff: 250,     // ms — first backoff window
   maxBackoff: 15_000,      // ms — exp backoff cap
-  gzipThreshold: 64 * 1024,// bytes — bodies >= this are gzip-compressed
+  gzipThreshold: 0,        // disabled; opt in only with server/proxy gzip decoding
   userAgent: "my-app/1.0", // appended to the SDK UA
   singleflight: true,      // collapse concurrent identical reads
   cache: false,            // LRU + TTL cache (off by default)
@@ -163,9 +162,9 @@ Status mapping:
 |-----------|---------|
 | Health    | `health` |
 | Tenants   | `listTenants`, `createTenant`, `getTenant`, `deleteTenant` |
-| Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `buildIndex`, `compactIndex`, `clearIndex`, `getLiveStats` |
+| Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `compactIndex`, `clearIndex`, `getLiveStats` |
 | Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans` |
-| Search    | `search`, `searchText`, `searchVector`, `multiSearch` |
+| Search    | `search` (text via `query`, vector via `vector`), `multiSearch` |
 | Jobs      | `switchEmbeddingModel`, `getJob`, `listJobs` |
 | Cluster   | `getClusterNodes`, `getClusterShards`, `getClusterHealth` |
 | LLM       | `getLLMSettings`, `updateLLMSettings`, `deleteLLMSettings` |
@@ -178,10 +177,13 @@ Status mapping:
   path, query and body share one in-flight request. On by default for
   idempotent (safe) methods.
 - **Optional response cache**: opt-in LRU + TTL cache for safe reads.
-  Set `cache: true` plus `cacheTTL` and `cacheSize`. Mutating calls are
-  never cached. Use `bypassCache: true` per call to skip.
-- **Automatic gzip**: request bodies above `gzipThreshold` (default 64
-  KiB) are compressed with the platform's `CompressionStream`.
+  Set `cache: true` plus `cacheTTL` and `cacheSize`. Successful mutations
+  clear the entire cache. Reads already in flight cannot refill it or share
+  a request with a read started after the mutation. Failed mutations and
+  read-only POSTs do not invalidate it. Use `bypassCache: true` per call to skip.
+- **Opt-in gzip**: disabled by default. Set a positive `gzipThreshold` only
+  when your server or proxy supports gzip request decoding. Eligible bodies
+  are compressed with the platform's `CompressionStream`.
 - **Retry-After honoring**: HTTP 429 responses with a `Retry-After`
   header (delta-seconds or HTTP-date) defer the next attempt by the
   exact amount the server requested.
@@ -211,13 +213,23 @@ await client.search({ indexId: "i_x", query: "..." }, { signal: ctrl.signal });
 
 ## Development
 
+Run these commands from the SDK root (the `typescript/` directory in the
+monorepo, or the root of the standalone repository):
+
 ```bash
 pnpm install
 pnpm build       # → dist/index.mjs, dist/index.cjs, dist/index.d.ts
+pnpm gen:types   # regenerate wire types from the OpenAPI spec
+pnpm gen:types:check # check committed types against the spec
 pnpm test        # vitest unit tests with msw mocks
 pnpm typecheck
 pnpm lint
 ```
+
+Generation uses `api/openapi/spec.yaml` in a standalone checkout, or
+`../api/openapi/spec.yaml` in the monorepo. Set `GRAPHANN_SPEC` to use a
+different spec. Generated headers use the logical source path, so moving
+the checkout does not change generated output.
 
 Integration tests run against a real server when both
 `GRAPHANN_BASE_URL` and `GRAPHANN_API_KEY` are set.

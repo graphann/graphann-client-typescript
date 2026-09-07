@@ -9,17 +9,15 @@
 import { LRUCache } from "./cache.js";
 import { GraphANNError } from "./errors.js";
 import { request, type HTTPRequest } from "./http.js";
-import {
-  type ClientOptions,
-  resolveOptions,
-  type ResolvedClientOptions,
-} from "./options.js";
+import { type ClientOptions, resolveOptions, type ResolvedClientOptions } from "./options.js";
 import { Paginator } from "./pagination.js";
 import { SingleFlight, stableHash } from "./singleflight.js";
 import type {
   AddDocumentsRequest,
   AddDocumentsResponse,
   APIKey,
+  BatchSearchRequest,
+  BatchSearchResponse,
   BulkDeleteByExternalIdsResponse,
   BulkDeleteDocumentsResponse,
   ChunkResponse,
@@ -28,9 +26,13 @@ import type {
   ClusterHealthResponse,
   ClusterNodesResponse,
   ClusterShardsResponse,
+  CompactAllResponse,
   CompactIndexResponse,
   CleanupOrphansResponse,
   CreateAPIKeyRequest,
+  CreateBackupResponse,
+  DeleteBackupResponse,
+  EmbedSpaceAdminResponse,
   GCResponse,
   CreateIndexRequest,
   CreateTenantRequest,
@@ -47,7 +49,11 @@ import type {
   IndexStatusResponse,
   ImportDocumentsResponse,
   Job,
+  LicenseAuditEvent,
+  LicenseStatus,
   ListAPIKeysResponse,
+  ListBackupsResponse,
+  ListDocumentEntry,
   ListDocumentsOptions,
   ListDocumentsPage,
   ListIndexesResponse,
@@ -66,6 +72,7 @@ import type {
   ProcessPendingResponse,
   RebuildGraphResponse,
   RequestOptions,
+  RestoreBackupResponse,
   SearchRequest,
   SearchResponse,
   SwitchEmbeddingModelRequest,
@@ -82,6 +89,7 @@ export class Client {
   private readonly opts: ResolvedClientOptions;
   private readonly singleflight: SingleFlight<unknown>;
   private readonly cache: LRUCache<string, unknown> | null;
+  private generation = 0;
 
   constructor(options: ClientOptions) {
     this.opts = resolveOptions(options);
@@ -133,10 +141,7 @@ export class Client {
 
   /** POST /v1/tenants */
   async createTenant(req: CreateTenantRequest, opts: RequestOptions = {}): Promise<Tenant> {
-    return this.send<Tenant>(
-      { method: "POST", path: "/v1/tenants", body: req },
-      opts,
-    );
+    return this.send<Tenant>({ method: "POST", path: "/v1/tenants", body: req }, opts);
   }
 
   /** GET /v1/tenants/{id} */
@@ -148,10 +153,7 @@ export class Client {
   }
 
   /** DELETE /v1/tenants/{id} */
-  async deleteTenant(
-    tenantId: TenantID,
-    opts: RequestOptions = {},
-  ): Promise<DeleteTenantResponse> {
+  async deleteTenant(tenantId: TenantID, opts: RequestOptions = {}): Promise<DeleteTenantResponse> {
     return this.send<DeleteTenantResponse>(
       { method: "DELETE", path: `/v1/tenants/${encodeURIComponent(tenantId)}` },
       opts,
@@ -222,10 +224,7 @@ export class Client {
   }
 
   /** GET /v1/tenants/{tid}/indexes/{iid}/status */
-  async getIndexStatus(
-    indexId: IndexID,
-    opts: RequestOptions = {},
-  ): Promise<IndexStatusResponse> {
+  async getIndexStatus(indexId: IndexID, opts: RequestOptions = {}): Promise<IndexStatusResponse> {
     const tenantId = this.requireTenant(opts);
     return this.send<IndexStatusResponse>(
       {
@@ -247,10 +246,7 @@ export class Client {
    * `Content-Type: application/json` — the server's middleware requires
    * the header on every mutating verb, body-less POSTs included.)
    */
-  async compactIndex(
-    indexId: IndexID,
-    opts: RequestOptions = {},
-  ): Promise<CompactIndexResponse> {
+  async compactIndex(indexId: IndexID, opts: RequestOptions = {}): Promise<CompactIndexResponse> {
     const tenantId = this.requireTenant(opts);
     return this.send<CompactIndexResponse>(
       {
@@ -300,10 +296,7 @@ export class Client {
    * graphs). Throws `ConflictError` (HTTP 409) while a compaction is in
    * progress.
    */
-  async rebuildGraph(
-    indexId: IndexID,
-    opts: RequestOptions = {},
-  ): Promise<RebuildGraphResponse> {
+  async rebuildGraph(indexId: IndexID, opts: RequestOptions = {}): Promise<RebuildGraphResponse> {
     const tenantId = this.requireTenant(opts);
     return this.send<RebuildGraphResponse>(
       {
@@ -413,10 +406,7 @@ export class Client {
   }
 
   /** DELETE /v1/tenants/{tid}/indexes/{iid}/pending */
-  async clearPending(
-    indexId: IndexID,
-    opts: RequestOptions = {},
-  ): Promise<ClearPendingResponse> {
+  async clearPending(indexId: IndexID, opts: RequestOptions = {}): Promise<ClearPendingResponse> {
     const tenantId = this.requireTenant(opts);
     return this.send<ClearPendingResponse>(
       {
@@ -482,17 +472,16 @@ export class Client {
    * Async iterator over /v1/tenants/{tid}/indexes/{iid}/documents.
    * Yields one `{ items, nextCursor }` per server page.
    */
-  listDocuments(args: ListDocumentsOptions, opts: RequestOptions = {}): Paginator<{
-    id: string;
-    text?: string;
-    metadata?: Record<string, unknown>;
-  }> {
+  listDocuments(
+    args: ListDocumentsOptions,
+    opts: RequestOptions = {},
+  ): Paginator<ListDocumentEntry> {
     const tenantId = args.tenantId ?? this.requireTenant(opts);
     const path = `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(args.indexId)}/documents`;
     const fetcher = async (
       cursor: string | undefined,
       signal?: AbortSignal,
-    ): Promise<Page<{ id: string; text?: string; metadata?: Record<string, unknown> }>> => {
+    ): Promise<Page<ListDocumentEntry>> => {
       const query: Record<string, string | number | undefined> = {};
       if (args.prefix !== undefined) query.prefix = args.prefix;
       if (args.limit !== undefined) query.limit = args.limit;
@@ -645,18 +634,20 @@ export class Client {
   /** POST /v1/tenants/{tid}/indexes/{iid}/search (hybrid) */
   async search(req: SearchRequest, opts: RequestOptions = {}): Promise<SearchResponse> {
     const tenantId = req.tenantId ?? this.requireTenant(opts);
-    if (!req.query && (!req.vector || req.vector.length === 0)) {
-      throw new GraphANNError("search() requires either `query` or `vector`");
+    if (!req.query && (!req.vector || req.vector.length === 0) && !req.vector_b64) {
+      throw new GraphANNError("search() requires `query`, `vector`, or `vector_b64`");
     }
     const body: Record<string, unknown> = {};
     if (req.query !== undefined) body.query = req.query;
     if (req.vector !== undefined) body.vector = req.vector;
+    if (req.vector_b64 !== undefined) body.vector_b64 = req.vector_b64;
     if (req.k !== undefined) body.k = req.k;
     if (req.filter !== undefined) body.filter = req.filter;
     if (req.rerank !== undefined) body.rerank = req.rerank;
     if (req.candidate_k !== undefined) body.candidate_k = req.candidate_k;
     if (req.rerank_k !== undefined) body.rerank_k = req.rerank_k;
     if (req.ef_search !== undefined) body.ef_search = req.ef_search;
+    if (req.hybrid !== undefined) body.hybrid = req.hybrid;
     return this.send<SearchResponse>(
       {
         method: "POST",
@@ -716,10 +707,7 @@ export class Client {
   }
 
   /** GET /v1/orgs/{orgID}/shared/indexes */
-  async listSharedIndexes(
-    orgId: string,
-    opts: RequestOptions = {},
-  ): Promise<OrgIndexListResponse> {
+  async listSharedIndexes(orgId: string, opts: RequestOptions = {}): Promise<OrgIndexListResponse> {
     return this.send<OrgIndexListResponse>(
       {
         method: "GET",
@@ -884,8 +872,7 @@ export class Client {
   /** POST /v1/tenants/{tid}/api-keys */
   async createAPIKey(req: CreateAPIKeyRequest, opts: RequestOptions = {}): Promise<APIKey> {
     const tenantId = req.tenantId ?? this.requireTenant(opts);
-    const body: Record<string, unknown> = { name: req.name };
-    if (req.user_id !== undefined) body.user_id = req.user_id;
+    const body = { name: req.name, user_id: req.user_id };
     return this.send<APIKey>(
       {
         method: "POST",
@@ -950,6 +937,194 @@ export class Client {
   }
 
   // -------------------------------------------------------------------------
+  // Batch search
+  // -------------------------------------------------------------------------
+
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/search/batch
+   *
+   * Runs multiple independent queries against one index in a single HTTP
+   * request — amortizes per-request socket overhead for offline/pipeline
+   * callers (evaluation runs, reranking stages, migrations). Capped at 128
+   * queries per request. One query failing does not fail the batch: its
+   * slot in the response carries `error` instead of `results`/`total`.
+   */
+  async batchSearch(
+    indexId: IndexID,
+    queries: BatchSearchRequest["queries"],
+    opts: RequestOptions = {},
+  ): Promise<BatchSearchResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<BatchSearchResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/search/batch`,
+        body: { queries },
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Index maintenance: compact-all
+  // -------------------------------------------------------------------------
+
+  /**
+   * POST /v1/tenants/{tid}/indexes/compact-all
+   *
+   * Queues every index owned by the tenant onto the compaction scheduler;
+   * indexes compact one at a time. An index already queued or in flight is
+   * reported in `skipped` rather than re-queued. Throws `ConflictError`
+   * (HTTP 409) when the server has no compaction scheduler wired. Track
+   * progress via `listJobs`.
+   */
+  async compactAllIndexes(opts: RequestOptions = {}): Promise<CompactAllResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<CompactAllResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/compact-all`,
+      },
+      opts,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // License
+  // -------------------------------------------------------------------------
+
+  /**
+   * GET /v1/license/status
+   *
+   * Unauthenticated, like `health`. Returns this node's license activation
+   * state, entitlements, and fingerprint match — `current_fingerprint` is
+   * what to paste into the licensing panel to rebind. 404s (not 501) when
+   * the server was started without a license manager.
+   */
+  async getLicenseStatus(opts: RequestOptions = {}): Promise<LicenseStatus> {
+    return this.send<LicenseStatus>(
+      { method: "GET", path: "/v1/license/status", signal: opts.signal },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * GET /v1/license/audit
+   *
+   * This node's own local license state-transition history, newest first —
+   * not the staff panel's cross-customer audit trail. Unauthenticated, same
+   * posture as `getLicenseStatus`.
+   *
+   * @param limit Maximum events to return. Omitted, zero, negative, or
+   *   greater than 1000 are all clamped to 1000 server-side.
+   */
+  async getLicenseAudit(limit?: number, opts: RequestOptions = {}): Promise<LicenseAuditEvent[]> {
+    const query: Record<string, number | undefined> = {};
+    if (limit !== undefined) query.limit = limit;
+    return this.send<LicenseAuditEvent[]>(
+      {
+        method: "GET",
+        path: "/v1/license/audit",
+        ...(Object.keys(query).length > 0 ? { query } : {}),
+        signal: opts.signal,
+      },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Admin: fleet embedding-space observability
+  // -------------------------------------------------------------------------
+
+  /**
+   * GET /v1/admin/embed-space
+   *
+   * Fleet-wide answer to "how many indexes are actually being
+   * fingerprint-checked, and which ones are not" — one row per catalog
+   * index (cold indexes included; their on-disk header is peeked, not
+   * loaded). `sum(counts.values())` always equals `indexes.length`.
+   */
+  async getEmbedSpaceAdmin(opts: RequestOptions = {}): Promise<EmbedSpaceAdminResponse> {
+    return this.send<EmbedSpaceAdminResponse>(
+      { method: "GET", path: "/v1/admin/embed-space" },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Backups
+  // -------------------------------------------------------------------------
+
+  /**
+   * POST /v1/tenants/{tid}/indexes/{iid}/backups
+   *
+   * Snapshots the index into the server's configured filesystem backup
+   * storage and returns the new backup id plus its manifest. Only mounted
+   * when the server was started with `--backup-dir`; throws (HTTP 501,
+   * `NotImplementedError`-shaped) otherwise so callers can distinguish
+   * "backups are off" from "route missing" (404).
+   */
+  async createBackup(indexId: IndexID, opts: RequestOptions = {}): Promise<CreateBackupResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<CreateBackupResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/indexes/${encodeURIComponent(indexId)}/backups`,
+      },
+      opts,
+    );
+  }
+
+  /** GET /v1/tenants/{tid}/backups — every backup summary for the tenant. */
+  async listBackups(opts: RequestOptions = {}): Promise<ListBackupsResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<ListBackupsResponse>(
+      { method: "GET", path: `/v1/tenants/${encodeURIComponent(tenantId)}/backups` },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * POST /v1/tenants/{tid}/backups/{backupID}/restore
+   *
+   * Restores the named backup into `destIndex` within the path tenant.
+   * `backupId` is percent-encoded here because a backup id contains
+   * slashes (it embeds the tenant, index, and timestamp).
+   */
+  async restoreBackup(
+    backupId: string,
+    destIndex: IndexID,
+    opts: RequestOptions = {},
+  ): Promise<RestoreBackupResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<RestoreBackupResponse>(
+      {
+        method: "POST",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/backups/${encodeURIComponent(backupId)}/restore`,
+        body: { dest_index: destIndex },
+      },
+      opts,
+    );
+  }
+
+  /**
+   * DELETE /v1/tenants/{tid}/backups/{backupID}
+   *
+   * Permanently deletes a backup from storage. `backupId` is
+   * percent-encoded here because a backup id contains slashes.
+   */
+  async deleteBackup(backupId: string, opts: RequestOptions = {}): Promise<DeleteBackupResponse> {
+    const tenantId = this.requireTenant(opts);
+    return this.send<DeleteBackupResponse>(
+      {
+        method: "DELETE",
+        path: `/v1/tenants/${encodeURIComponent(tenantId)}/backups/${encodeURIComponent(backupId)}`,
+      },
+      opts,
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // Internal request dispatcher
   // -------------------------------------------------------------------------
 
@@ -959,7 +1134,8 @@ export class Client {
    *   - cache lookup/storage (only when `idempotent: true` and cache is on)
    *   - singleflight coalescing (only when `idempotent: true` and singleflight is on)
    *
-   * Mutating requests (POST/PUT/PATCH/DELETE) bypass both layers.
+   * Mutations bypass both layers and invalidate all cached reads on success.
+   * Read-only POST requests are marked idempotent by their callers.
    */
   private async send<T>(
     req: HTTPRequest,
@@ -976,9 +1152,10 @@ export class Client {
       },
     };
 
+    const generation = this.generation;
     const key =
       flags.idempotent && (this.cache !== null || this.opts.singleflight)
-        ? `${merged.method} ${merged.path}?${stableHash(merged.query ?? null)} :: ${stableHash(merged.body ?? null)}`
+        ? `${generation} ${merged.method} ${merged.path}?${stableHash(merged.query ?? null)} :: ${stableHash(merged.body ?? null)} :: ${stableHash(merged.headers ?? null)}`
         : "";
 
     if (flags.idempotent && this.cache !== null && !flags.bypassCache && key) {
@@ -992,18 +1169,21 @@ export class Client {
 
     const exec = async (): Promise<T> => {
       const result = await request<T>(this.opts, merged);
-      if (flags.idempotent && this.cache !== null && !flags.bypassCache && key) {
+      if (!flags.idempotent) {
+        this.generation++;
+        this.cache?.clear();
+      } else if (
+        generation === this.generation &&
+        this.cache !== null &&
+        !flags.bypassCache &&
+        key
+      ) {
         this.cache.set(key, result);
       }
       return result;
     };
 
-    if (
-      flags.idempotent &&
-      this.opts.singleflight &&
-      !flags.bypassSingleflight &&
-      key
-    ) {
+    if (flags.idempotent && this.opts.singleflight && !flags.bypassSingleflight && key) {
       if (this.singleflight.has(key)) {
         this.opts.metricsHook?.("singleflight.coalesced", 1, { path: merged.path });
       }

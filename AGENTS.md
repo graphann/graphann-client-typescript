@@ -8,7 +8,7 @@ current source (`src/client.ts`, `src/types.ts`, `src/options.ts`,
 ## Install
 
 ```bash
-pnpm add @graphann/client@0.8.0
+pnpm add @graphann/client@0.9.0
 ```
 
 ESM-first with a CommonJS fallback. Runs on Node 20+, Deno, Bun,

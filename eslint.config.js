@@ -41,6 +41,15 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "*.config.js", "*.config.ts"],
+    // Plain Node tooling script, not part of the typechecked package build
+    // (no tsconfig covers it, same as the *.config.js/ts entries above).
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "*.config.js",
+      "*.config.ts",
+      "scripts/**",
+    ],
   },
 );

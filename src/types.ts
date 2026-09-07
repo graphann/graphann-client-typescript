@@ -1,10 +1,25 @@
 /**
  * TypeScript types for the GraphANN HTTP API.
  *
- * Field names mirror the on-the-wire snake_case schema. Keep this file pure
- * data — runtime helpers belong in `client.ts`. Server source of truth lives
- * in `internal/server/handlers.go`, `internal/tenant/types.go`, and friends.
+ * Wire-shape types (request/response bodies) are thin aliases over the
+ * generated `components["schemas"]` types in `./generated/types.ts`, which
+ * are themselves derived from `api/openapi/spec.yaml` — the single source of
+ * truth. This file exists to:
+ *   - keep the public export names stable (some generated schema names
+ *     differ from the names this SDK has always exported, e.g. `Tenant` vs
+ *     generated `TenantResponse`);
+ *   - compose client-side-only convenience shapes (options bags, method
+ *     argument objects that mix a path/tenant override with a request body)
+ *     that have no corresponding spec schema;
+ *   - carry hand-written notes about server quirks the spec doesn't state
+ *     as a JSON Schema constraint (mutually-exclusive fields, 500-vs-400
+ *     surprises, etc).
+ *
+ * Field names mirror the on-the-wire snake_case schema. Keep it pure data —
+ * runtime helpers belong in `client.ts`.
  */
+
+import type { components } from "./generated/types.js";
 
 // ---------------------------------------------------------------------------
 // IDs
@@ -18,246 +33,79 @@ export type JobID = string;
 // Health
 // ---------------------------------------------------------------------------
 
-export interface HealthResponse {
-  status: string;
+export type HealthResponse = components["schemas"]["HealthResponse"] & {
   reason?: string;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Tenant
 // ---------------------------------------------------------------------------
 
-export interface Tenant {
-  id: TenantID;
-  name: string;
-  created_at: string;
-  updated_at?: string;
+export type Tenant = components["schemas"]["TenantDetailResponse"] & {
   index_count?: number;
   metadata?: Record<string, string>;
-}
+};
 
-export interface CreateTenantRequest {
-  /** Optional explicit ID for idempotent creation. */
-  id?: string;
-  name: string;
-}
+export type CreateTenantRequest = components["schemas"]["CreateTenantRequest"];
 
-export interface ListTenantsResponse {
-  tenants: Tenant[];
-  total: number;
-}
+export type ListTenantsResponse = components["schemas"]["ListTenantsResponse"];
 
-export interface DeleteTenantResponse {
-  deleted: true;
-  tenant_id: TenantID;
-  name: string;
-}
+export type DeleteTenantResponse = components["schemas"]["DeleteTenantResponse"];
 
 // ---------------------------------------------------------------------------
 // Index
 // ---------------------------------------------------------------------------
 
-export type IndexStatus = "pending" | "empty" | "building" | "ready" | "error" | "deleted";
+export type IndexStatus = "pending" | "building" | "ready" | "error" | "deleted";
 
-export interface IndexInfo {
-  id: IndexID;
-  tenant_id: TenantID;
-  name: string;
-  description?: string;
-  dimension: number;
-  num_chunks: number;
-  num_docs: number;
-  status: IndexStatus;
-  error?: string;
-  created_at: string;
-  updated_at: string;
-  created_by?: string;
-  path?: string;
-  metadata?: Record<string, string>;
-  compression?: string;
-  approximate?: boolean;
-}
+export type IndexInfo = components["schemas"]["IndexInfo"];
 
-export type CompressionType = "none" | "scalar" | "binary" | "pq" | "recompute" | "";
+export type CompressionType = components["schemas"]["Compression"];
 
-export interface CreateIndexRequest {
-  /** Optional explicit ID for idempotent creation. */
-  id?: string;
-  name: string;
-  description?: string;
-  compression?: CompressionType;
-  approximate?: boolean;
-}
+export type CreateIndexRequest = components["schemas"]["CreateIndexRequest"];
 
-export interface UpdateIndexRequest {
-  name?: string;
-  description?: string;
-  /**
-   * New compression mode, persisted as metadata only — no immediate
-   * rebuild; it takes effect at the next compaction. Note that `""` and
-   * `"none"` both fold to the server's `--default-compression` (since
-   * server 2026-04-30); `"none"` is not a per-index opt-out unless the
-   * server runs `--default-compression=none`. Invalid values currently
-   * surface as a 500 `ServerError` (not a 400) — server-side quirk.
-   */
-  compression?: CompressionType;
-  /** Propagates immediately to a loaded live index. */
-  approximate?: boolean;
-}
+export type UpdateIndexRequest = components["schemas"]["UpdateIndexRequest"];
 
-export interface ListIndexesResponse {
-  indexes: IndexInfo[];
-  total: number;
-}
+export type ListIndexesResponse = components["schemas"]["ListIndexesResponse"];
 
-export interface IndexStatusResponse {
-  index_id: IndexID;
-  status: IndexStatus;
-  error?: string;
-}
+export type IndexStatusResponse = components["schemas"]["IndexStatusResponse"];
 
-export interface CompactIndexResponse {
-  index_id: IndexID;
-  status: string;
-  message: string;
-}
+export type CompactIndexResponse = components["schemas"]["CompactResponse"];
 
-export interface ClearIndexResponse {
-  index_id: IndexID;
-  status: string;
-  message: string;
-}
+export type ClearIndexResponse = components["schemas"]["ClearResponse"];
 
-export interface LiveIndexStats {
-  index_id: IndexID;
-  is_live: boolean;
-  base_chunks?: number;
-  delta_chunks?: number;
-  total_chunks?: number;
-  deleted_chunks?: number;
-  live_chunks?: number;
-  documents?: number;
-  num_chunks?: number;
-  num_docs?: number;
-  dimension: number;
-  is_dirty?: boolean;
-}
+export type LiveIndexStats = components["schemas"]["LiveStatsResponse"];
 
 // ---------------------------------------------------------------------------
 // Documents
 // ---------------------------------------------------------------------------
 
-export interface Document {
-  /** Optional client-supplied external ID. */
-  id?: string;
-  text: string;
-  /** Alias for `text` accepted by the server. */
-  content?: string;
-  metadata?: Record<string, unknown>;
-  /** When `true`, replace existing chunks for this external ID. */
-  upsert?: boolean;
-  /** RFC3339 timestamp; chunks become invisible after expiry. */
-  expires_at?: string;
-  repo_id?: string;
-  file_path?: string;
-  commit_sha?: string;
-  /**
-   * Optional precomputed embedding — the server skips embedding and
-   * ingests it as-is. All-or-nothing per batch: EVERY document must
-   * carry a non-empty `vector`, or none may (mixed batches are rejected
-   * with a 400). Length must match the index dimension once fixed; a
-   * fresh index accepts any length and the first ingest fixes it.
-   * Precomputed inserts are idempotent by external ID (upsert), so the
-   * per-document `upsert` pre-delete is not run on this path.
-   */
-  vector?: number[];
-}
+export type Document = components["schemas"]["Document"];
 
-export interface AddDocumentsRequest {
+/** Body accepted by `Client.addDocuments`. `defer_save`/`bulk` are optional client-side (server defaults both to false). */
+export type AddDocumentsRequest = {
   documents: Document[];
-  /**
-   * Skip the per-batch save. Data stays in memory (index dirty) but is
-   * STILL searchable; persist later via `Client.flushIndex`. Can also be
-   * forced server-side with the `?defer_save=` query param.
-   */
-  defer_save?: boolean;
-  /**
-   * Implies `defer_save` AND defers the per-node HNSW insert — the delta
-   * graph is built once, concurrently, at flush. Bulk-ingested data is
-   * NOT searchable until the graph is built; as a safety net the first
-   * search against a pending deferred build transparently triggers it
-   * (build-on-read), so searches never silently miss bulk data.
-   */
-  bulk?: boolean;
-}
+} & Partial<Pick<components["schemas"]["AddDocumentsRequest"], "defer_save" | "bulk">>;
 
-export interface AddDocumentsResponse {
-  added: number;
-  index_id: IndexID;
-  // Server emits []store.ChunkID (= []string) UUIDs, not numbers.
-  chunk_ids: string[];
-  /**
-   * One entry per submitted document, positionally aligned with the
-   * request array. Present only when the server minted at least one
-   * external ID (sharded ingest of ID-less documents — the external ID
-   * is the shard routing key); when present it includes client-supplied
-   * IDs too. Persist these as the durable document IDs. Unsharded
-   * ingests never mint, so the field is absent there.
-   */
-  external_ids?: string[];
-}
+export type AddDocumentsResponse = components["schemas"]["AddDocumentsResponse"];
 
 /** Body returned by `POST .../indexes/{id}/flush`. */
-export interface FlushIndexResponse {
-  flushed: boolean;
-}
+export type FlushIndexResponse = components["schemas"]["FlushIndexResponse"];
 
 /** Body returned by `POST .../indexes/{id}/rebuild-graph`. */
-export interface RebuildGraphResponse {
-  rebuilt: boolean;
-  chunks: number;
-  wall_ms: number;
-}
+export type RebuildGraphResponse = components["schemas"]["RebuildGraphResponse"];
 
-export interface ImportDocumentsResponse {
-  imported: number;
-  index_id: IndexID;
-  document_ids: number[];
-  pending_total: number;
-  status: string;
-  message?: string;
-}
+export type ImportDocumentsResponse = components["schemas"]["ImportDocumentsResponse"];
 
-export interface PendingStatusResponse {
-  index_id: IndexID;
-  pending_count: number;
-}
+export type PendingStatusResponse = components["schemas"]["PendingStatusResponse"];
 
-export interface ProcessPendingResponse {
-  index_id: IndexID;
-  processed: number;
-  chunks_created: number;
-  // Server emits []store.ChunkID (= []string) UUIDs, not numbers.
-  chunk_ids?: string[];
-}
+export type ProcessPendingResponse = components["schemas"]["ProcessPendingResponse"];
 
-export interface ClearPendingResponse {
-  index_id: IndexID;
-  status: string;
-  message?: string;
-  cleared?: number;
-}
+export type ClearPendingResponse = components["schemas"]["ClearPendingResponse"];
 
-export interface ListDocumentEntry {
-  id: string;
-  text?: string;
-  metadata?: Record<string, unknown>;
-}
+export type ListDocumentEntry = components["schemas"]["ListDocumentEntry"];
 
-export interface ListDocumentsPage {
-  documents: ListDocumentEntry[];
-  next_cursor?: string;
-}
+export type ListDocumentsPage = components["schemas"]["ListDocumentsResponse"];
 
 /** Options for `client.listDocuments`. */
 export interface ListDocumentsOptions {
@@ -268,214 +116,93 @@ export interface ListDocumentsOptions {
   tenantId?: TenantID;
 }
 
-export interface BulkDeleteDocumentsRequest {
-  document_ids: number[];
-}
+export type BulkDeleteDocumentsRequest = components["schemas"]["BulkDeleteDocumentsRequest"];
 
-export interface BulkDeleteDocumentsResponse {
-  index_id: IndexID;
-  documents_deleted: number;
-  chunks_deleted: number;
-  deleted_per_doc: Record<string, number>;
-}
+export type BulkDeleteDocumentsResponse = components["schemas"]["BulkDeleteDocumentsResponse"];
 
-export interface BulkDeleteByExternalIdsRequest {
-  external_ids: string[];
-}
+export type BulkDeleteByExternalIdsRequest =
+  components["schemas"]["BulkDeleteByExternalIDsRequest"];
 
-export interface BulkDeleteByExternalIdsResponse {
-  index_id: IndexID;
-  documents_deleted: number;
-  chunks_deleted: number;
-  deleted_per_id: Record<string, number>;
-}
+export type BulkDeleteByExternalIdsResponse =
+  components["schemas"]["BulkDeleteByExternalIDsResponse"];
 
-export interface DeleteDocumentResponse {
-  deleted_chunks: number;
-  document_id: number;
-  index_id: IndexID;
-}
+export type DeleteDocumentResponse = components["schemas"]["DeleteDocumentResponse"];
 
-export interface DocumentChunk {
-  chunk_id: number;
-  uuid?: string;
-  text: string;
-  chunk_index: number;
-  start: number;
-  end: number;
-  repo_id?: string;
-  file_path?: string;
-  commit_sha?: string;
-}
+export type DocumentChunk = components["schemas"]["GetDocumentChunk"];
 
-export interface GetDocumentResponse {
-  index_id: IndexID;
-  document_id: number;
-  external_id?: string;
-  chunks: DocumentChunk[];
-  total_chunks: number;
-}
+export type GetDocumentResponse = components["schemas"]["GetDocumentResponse"];
 
 /**
  * Body returned by `POST /v1/admin/cleanup-orphans`.
  *
  * `min_age` is a Go-style duration string echoing the cutoff the server
  * actually applied (e.g. `"1h0m0s"`, `"24h0m0s"`). `dry_run` echoes the
- * dry-run flag — when true, `removed` is what would have been deleted,
- * not what was deleted. Both fields default to `""` / `false` when an
- * older server omits them.
+ * dry-run flag — when true, `removed` is what would have been deleted, not
+ * what was deleted.
  */
-export interface CleanupOrphansResponse {
-  removed: string[];
-  freed_bytes: number;
-  min_age?: string;
-  dry_run?: boolean;
-}
+export type CleanupOrphansResponse = components["schemas"]["AdminCleanupResponse"];
 
 /**
  * Body returned by both `POST .../indexes/{id}/gc` and `POST /v1/admin/gc`.
- * Reports the count of expired documents reclaimed.
+ * The per-index route additionally echoes `index_id`; admin GC does not.
  */
-export interface GCResponse {
-  /** Index id, present on per-index GC, omitted for admin GC. */
-  index_id?: string;
-  deleted_count: number;
-}
+export type GCResponse =
+  | components["schemas"]["GCResponse"]
+  | components["schemas"]["AdminGCResponse"];
 
-export interface ChunkResponse {
-  chunk_id: number;
-  text?: string;
-  document_id: number;
-  chunk_index: number;
-  start: number;
-  end: number;
-}
+export type ChunkResponse = components["schemas"]["ChunkResponse"];
 
-export interface DeleteChunksResponse {
-  deleted: number;
-  index_id: IndexID;
-}
+export type DeleteChunksResponse = components["schemas"]["DeleteChunksResponse"];
 
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
-export interface SearchFilter {
-  repo_ids?: string[];
-  exclude_external_ids?: string[];
-  metadata_filter?: Record<string, unknown>;
-  equals?: Record<string, string>;
-}
+/** `omit_text` has a server-side default (`false`), so it's optional here even though the spec marks it always-present in the wire shape. */
+export type SearchFilter = Omit<components["schemas"]["SearchFilter"], "omit_text"> &
+  Partial<Pick<components["schemas"]["SearchFilter"], "omit_text">>;
 
-export interface SearchRequest {
-  indexId: IndexID;
-  query?: string;
-  vector?: number[];
-  k?: number;
+/** Body fields accepted by `POST .../search`, as sent on the wire. */
+export type SearchRequestBody = Omit<components["schemas"]["SearchRequest"], "filter"> & {
   filter?: SearchFilter;
-  /**
-   * Enable cross-encoder reranking of the top-`candidate_k` HNSW
-   * candidates. Effective only when the server has a reranker
-   * configured (via `--reranker-url`) AND `query` is supplied —
-   * vector-only requests have no text to feed the cross-encoder.
-   * No-op against servers without a reranker, so safe to set
-   * unconditionally. Defaults to `false`.
-   */
-  rerank?: boolean;
-  /**
-   * First-stage candidate pool size fed to the reranker. Effective
-   * only when `rerank` is true. Omit (or `0`) to use the server
-   * default of `max(4*k, 50)`. The server clamps to `[k, 1000]`.
-   */
-  candidate_k?: number;
-  /**
-   * Number of results to return AFTER reranking. Effective only when
-   * `rerank` is true. Omit (or `0`) to default to `k`.
-   */
-  rerank_k?: number;
-  /**
-   * Per-query HNSW beam width. Omit (or `0`) to use the server default
-   * (`--search-ef`, default 64). The server clamps rather than rejects:
-   * negative values fall back to the default, values above 2000 are
-   * capped. Mode-local floors may raise the effective ef (scalar-quant
-   * and guided-recompute paths); binary/PQ flat scans ignore it.
-   */
-  ef_search?: number;
+};
+
+export type SearchRequest = Partial<SearchRequestBody> & {
+  indexId: IndexID;
   /** Tenant override when not set on the client. */
   tenantId?: TenantID;
-}
+};
 
-export interface SearchResult {
-  id: string;
-  text?: string;
-  /**
-   * First-stage cosine similarity (higher is better). Always
-   * populated, regardless of whether reranking ran.
-   */
-  score: number;
-  /**
-   * Cross-encoder relevance score, in the reranker's native scale
-   * (typically roughly -10..10 for bge-reranker-v2-m3). Present only
-   * when the server actually applied the reranker to this entry.
-   * When set, the result ordering reflects this field; when absent,
-   * ordering is by `score`.
-   */
-  rerank_score?: number;
-  metadata?: unknown;
-}
+export type SearchResult = components["schemas"]["SearchResult"];
 
-export interface SearchResponse {
-  results: SearchResult[];
-  total: number;
-  /**
-   * Sharded-search metadata. The next four fields appear ONLY on the
-   * sharded path (cluster search wired AND the index has more than one
-   * shard); single-node and unsharded deployments return only
-   * `results`/`total`. `partial` is true whenever at least one shard
-   * contributed nothing. Note: `rerank`/`candidate_k`/`rerank_k` are NOT
-   * applied on the sharded path, and results are deduped by external ID
-   * keeping the highest score.
-   */
-  partial?: boolean;
-  shards_total?: number;
-  shards_ok?: number;
-  /** Degraded shard IDs; present only when non-empty. */
-  degraded_shards?: string[];
-}
+export type SearchResponse = components["schemas"]["SearchResponse"];
+
+/**
+ * Body of `POST .../search/batch`. Each entry in `queries` accepts the same
+ * (relaxed-optional) shape as `/search`'s body — capped at 128 entries per
+ * request.
+ */
+export type BatchSearchRequest = {
+  queries: Partial<SearchRequestBody>[];
+};
+
+export type BatchSearchResult = components["schemas"]["BatchSearchResult"];
+
+export type BatchSearchResponse = components["schemas"]["BatchSearchResponse"];
 
 // Multi-source / org-level search.
 
-export interface MultiSearchRequest {
+export type MultiSearchRequest = Partial<
+  Omit<components["schemas"]["MultiSearchRequest"], "query">
+> & {
   orgId: string;
   userId: string;
   query: string;
-  k?: number;
-  sources?: string[];
-  ef_search?: number;
-  include_text?: boolean;
-  start_time?: number;
-  end_time?: number;
-  distance_threshold?: number;
-}
+};
 
-export interface MultiSearchResult {
-  chunk_id: number;
-  text?: string;
-  distance: number;
-  source_type: string;
-  repo_id?: string;
-  metadata?: Record<string, unknown>;
-  created_at?: number;
-  shared?: boolean;
-}
+export type MultiSearchResult = components["schemas"]["MultiSearchResult"];
 
-export interface MultiSearchResponse {
-  results: MultiSearchResult[];
-  total: number;
-  query: string;
-  org_id: string;
-  user_id: string;
-}
+export type MultiSearchResponse = components["schemas"]["MultiSearchResponse"];
 
 // ---------------------------------------------------------------------------
 // Jobs (hot model switch + read/list)
@@ -484,38 +211,24 @@ export interface MultiSearchResponse {
 export type JobKind = "reembed";
 export type JobStatus = "queued" | "running" | "completed" | "failed";
 
-export interface JobProgress {
-  chunks_done: number;
-  chunks_total: number;
-}
+export type JobProgress = components["schemas"]["JobProgress"];
 
-export interface Job {
-  job_id: JobID;
-  kind: JobKind;
-  tenant_id: TenantID;
-  index_id: IndexID;
-  status: JobStatus;
-  progress: JobProgress;
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-  error?: string;
-}
+export type Job = components["schemas"]["Job"];
 
-export interface SwitchEmbeddingModelRequest {
+export type SwitchEmbeddingModelRequest = Partial<
+  Omit<
+    components["schemas"]["SwitchEmbeddingModelRequest"],
+    "embedding_backend" | "model" | "dimension"
+  >
+> & {
   indexId: IndexID;
-  embedding_backend: "ollama" | "openai" | "local_onnx";
+  embedding_backend: components["schemas"]["SwitchEmbeddingModelRequest"]["embedding_backend"];
   model: string;
   dimension: number;
-  endpoint_override?: string;
-  api_key?: string;
   tenantId?: TenantID;
-}
+};
 
-export interface SwitchEmbeddingModelResponse {
-  job_id: JobID;
-  status: JobStatus;
-}
+export type SwitchEmbeddingModelResponse = components["schemas"]["SwitchEmbeddingModelResponse"];
 
 export interface ListJobsOptions {
   /** Scope to a specific tenant; falls back to client default when omitted. */
@@ -527,83 +240,31 @@ export interface ListJobsOptions {
   limit?: number;
 }
 
-export interface ListJobsResponse {
-  jobs: Job[];
-  total: number;
-  next_cursor?: string;
-}
+export type ListJobsResponse = components["schemas"]["JobListResponse"];
 
 // ---------------------------------------------------------------------------
 // Cluster
 // ---------------------------------------------------------------------------
 
-/**
- * Known cluster node states. Server may add new ones; consumers should treat
- * `state` as a string in switch fallthrough.
- */
 export type ClusterNodeState = "alive" | "suspect" | "dead";
 
-export interface ClusterNode {
-  id: string;
-  addr: string;
-  zone?: string;
-  /**
-   * One of `"alive"`, `"suspect"`, `"dead"`, or another string the server
-   * defines in the future. The intersection with `Record<never, never>` keeps
-   * literal autocomplete available without forcing a closed union.
-   */
-  state: ClusterNodeState | (string & Record<never, never>);
-  last_seen: string;
-}
+export type ClusterNode = components["schemas"]["ClusterNodeView"];
 
-export interface ClusterShard {
-  id: string;
-  primary: string;
-  replicas: string[];
-  zone_placement?: Record<string, string>;
-}
+export type ClusterShard = components["schemas"]["ClusterShardView"];
 
-export interface ClusterNodesResponse {
-  nodes: ClusterNode[];
-  leader: string;
-}
+export type ClusterNodesResponse = components["schemas"]["ListClusterNodesResponse"];
 
-export interface ClusterShardsResponse {
-  shards: ClusterShard[];
-  rf: number;
-}
+export type ClusterShardsResponse = components["schemas"]["ListClusterShardsResponse"];
 
-export interface ClusterHealthResponse {
-  status: "ok" | "degraded" | "unhealthy";
-  cluster_size: number;
-  alive_nodes: number;
-  raft_has_leader: boolean;
-  under_replicated_shards?: number;
-}
+export type ClusterHealthResponse = components["schemas"]["ClusterHealthResponse"];
 
 // ---------------------------------------------------------------------------
 // LLM Settings
 // ---------------------------------------------------------------------------
 
-/**
- * Known LLM provider types. Server may add new ones; treat as a string in
- * switch fallthrough.
- */
 export type LLMProvider = "openai" | "ollama" | "anthropic";
 
-export interface LLMSettings {
-  /**
-   * One of the known providers, or another string the server may introduce
-   * later. The intersection with `Record<never, never>` keeps literal
-   * autocomplete without forcing a closed union.
-   */
-  provider: LLMProvider | (string & Record<never, never>);
-  model: string;
-  api_key?: string;
-  base_url?: string;
-  temperature?: number;
-  max_tokens?: number;
-}
+export type LLMSettings = components["schemas"]["LLMSettings"];
 
 export interface UpdateLLMSettingsResponse {
   message: string;
@@ -622,98 +283,100 @@ export interface DeleteLLMSettingsResponse {
 // ---------------------------------------------------------------------------
 
 /** Response from creating an API key. The `plaintext` secret is returned ONCE. */
-export interface APIKey {
-  id: string;
-  name: string;
-  user_id?: string;
-  /** The full key secret. Returned only on creation and never re-readable. */
-  plaintext: string;
-  created_at: string;
-}
+export type APIKey = components["schemas"]["CreateAPIKeyResponse"];
 
 /** An entry in the list-keys response. Never includes the plaintext secret. */
-export interface APIKeyListItem {
-  id: string;
-  user_id?: string;
-  name: string;
-  created_at: string;
-  last_used_at?: string;
-}
+export type APIKeyListItem = components["schemas"]["APIKeyListItem"];
 
-export interface CreateAPIKeyRequest {
-  /** Optional user the key is scoped to. Empty/omitted is allowed. */
-  user_id?: string;
-  /** The key's label. */
-  name: string;
+export type CreateAPIKeyRequest = components["schemas"]["CreateAPIKeyRequest"] & {
   tenantId?: TenantID;
-}
+};
 
-export interface ListAPIKeysResponse {
-  api_keys: APIKeyListItem[];
-}
+export type ListAPIKeysResponse = components["schemas"]["ListAPIKeysResponse"];
 
 // ---------------------------------------------------------------------------
 // Org-level
 // ---------------------------------------------------------------------------
 
-export interface OrgDocumentInput {
-  resource_id?: string;
-  text: string;
-  metadata?: Record<string, string>;
-}
+export type OrgDocumentInput = components["schemas"]["SyncDocumentInput"];
 
-export interface OrgSyncDocumentsRequest {
+export type OrgSyncDocumentsRequest = Omit<
+  components["schemas"]["SyncDocumentsRequest"],
+  "documents"
+> & {
   orgId: string;
-  user_id: string;
-  source_type: string;
-  shared: boolean;
   documents: OrgDocumentInput[];
-}
+};
 
-export interface OrgSyncDocumentsResponse {
-  synced: number;
-  org_id: string;
-  user_id: string;
-  source_type: string;
-  index_type: "personal" | "shared";
-}
+export type OrgSyncDocumentsResponse = components["schemas"]["SyncDocumentsResponse"];
 
-export interface OrgIndexListResponse {
-  indexes: IndexInfo[];
-  total: number;
-  org_id: string;
-  /** Set when the listing is scoped to a user; absent for shared listings. */
-  user_id?: string;
-}
+export type OrgIndexListResponse = components["schemas"]["OrgIndexListResponse"];
 
 // ---------------------------------------------------------------------------
 // Resources (atomic upsert)
 // ---------------------------------------------------------------------------
 
-export interface UpsertResourceRequest {
-  text: string;
-  metadata?: Record<string, string>;
-}
+export type UpsertResourceRequest = components["schemas"]["UpsertResourceRequest"];
 
-export interface UpsertResourceResponse {
-  resource_id: string;
-  chunks_added: number;
-  chunks_tombstoned: number;
-  operation: "create" | "update";
-}
+export type UpsertResourceResponse = components["schemas"]["UpsertResourceResponse"];
+
+// ---------------------------------------------------------------------------
+// License
+// ---------------------------------------------------------------------------
+
+export type LicenseStatus = components["schemas"]["LicenseStatus"];
+
+export type LicenseAuditEvent = components["schemas"]["LicenseAuditEvent"];
+
+// ---------------------------------------------------------------------------
+// Admin: fleet embedding-space observability
+// ---------------------------------------------------------------------------
+
+export type EmbedSpaceIndexRow = components["schemas"]["EmbedSpaceIndexRow"];
+
+export type EmbedSpaceAdminResponse = components["schemas"]["EmbedSpaceAdminResponse"];
+
+// ---------------------------------------------------------------------------
+// Index maintenance: compact-all
+// ---------------------------------------------------------------------------
+
+export type CompactAllSkipped = components["schemas"]["CompactAllSkipped"];
+
+export type CompactAllResponse = components["schemas"]["CompactAllResponse"];
+
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+export type BackupChunkInfo = components["schemas"]["BackupChunkInfo"];
+
+export type BackupMeta = components["schemas"]["BackupMeta"];
+
+export type BackupManifest = components["schemas"]["BackupManifest"];
+
+export type CreateBackupResponse = components["schemas"]["CreateBackupResponse"];
+
+/**
+ * Condensed view returned by list-backups. NOTE: this struct has no JSON
+ * tags on the server, so the field names are the Go field names verbatim
+ * (capitalized), not the snake_case used elsewhere in this API.
+ */
+export type BackupSummary = components["schemas"]["BackupSummary"];
+
+export type ListBackupsResponse = components["schemas"]["ListBackupsResponse"];
+
+export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
+
+export type RestoreBackupResponse = components["schemas"]["RestoreBackupResponse"];
+
+export type DeleteBackupResponse = components["schemas"]["DeleteBackupResponse"];
 
 // ---------------------------------------------------------------------------
 // Common
 // ---------------------------------------------------------------------------
 
 /** Wire shape of a server-emitted error envelope. */
-export interface ServerErrorEnvelope {
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
+export type ServerErrorEnvelope = components["schemas"]["ErrorEnvelope"];
 
 /** Per-request options accepted by every method. */
 export interface RequestOptions {

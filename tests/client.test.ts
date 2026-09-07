@@ -46,11 +46,7 @@ function newClient(overrides: Partial<ConstructorParameters<typeof Client>[0]> =
 
 describe("Client.health", () => {
   it("returns 200 success", async () => {
-    server.use(
-      http.get(`${BASE}/health`, () =>
-        HttpResponse.json({ status: "healthy" }),
-      ),
-    );
+    server.use(http.get(`${BASE}/health`, () => HttpResponse.json({ status: "healthy" })));
     const client = newClient();
     expect(await client.health()).toEqual({ status: "healthy" });
   });
@@ -112,7 +108,10 @@ describe("Client error mapping", () => {
   it("maps 404 to NotFoundError", async () => {
     server.use(
       http.get(`${BASE}/v1/tenants/t_missing`, () =>
-        HttpResponse.json({ error: { code: "not_found", message: "Tenant not found" } }, { status: 404 }),
+        HttpResponse.json(
+          { error: { code: "not_found", message: "Tenant not found" } },
+          { status: 404 },
+        ),
       ),
     );
     await expect(newClient().getTenant("t_missing")).rejects.toBeInstanceOf(NotFoundError);
@@ -121,10 +120,7 @@ describe("Client error mapping", () => {
   it("maps 409 to ConflictError", async () => {
     server.use(
       http.patch(`${BASE}/v1/tenants/t_default/indexes/i_x/embedding-model`, () =>
-        HttpResponse.json(
-          { error: { code: "conflict", message: "in flight" } },
-          { status: 409 },
-        ),
+        HttpResponse.json({ error: { code: "conflict", message: "in flight" } }, { status: 409 }),
       ),
     );
     await expect(
@@ -140,12 +136,15 @@ describe("Client error mapping", () => {
   it("maps 413 to PayloadTooLargeError", async () => {
     server.use(
       http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, () =>
-        HttpResponse.json({ error: { code: "payload_too_large", message: "too big" } }, { status: 413 }),
+        HttpResponse.json(
+          { error: { code: "payload_too_large", message: "too big" } },
+          { status: 413 },
+        ),
       ),
     );
-    await expect(
-      newClient().addDocuments("i_x", [{ text: "hi" }]),
-    ).rejects.toBeInstanceOf(PayloadTooLargeError);
+    await expect(newClient().addDocuments("i_x", [{ text: "hi" }])).rejects.toBeInstanceOf(
+      PayloadTooLargeError,
+    );
   });
 
   it("maps 429 to RateLimitError with parsed Retry-After", async () => {
@@ -169,10 +168,7 @@ describe("Client error mapping", () => {
   it("maps 5xx to ServerError preserving status", async () => {
     server.use(
       http.get(`${BASE}/v1/tenants`, () =>
-        HttpResponse.json(
-          { error: { code: "internal_error", message: "boom" } },
-          { status: 502 },
-        ),
+        HttpResponse.json({ error: { code: "internal_error", message: "boom" } }, { status: 502 }),
       ),
     );
     try {
@@ -261,9 +257,9 @@ describe("Retry behaviour", () => {
         );
       }),
     );
-    await expect(
-      newClient({ maxRetries: 2, initialBackoff: 1 }).health(),
-    ).rejects.toBeInstanceOf(ServerError);
+    await expect(newClient({ maxRetries: 2, initialBackoff: 1 }).health()).rejects.toBeInstanceOf(
+      ServerError,
+    );
     expect(calls).toBe(3); // initial + 2 retries
   });
 });
@@ -346,6 +342,116 @@ describe("Cache and singleflight", () => {
     await client.listTenants({ bypassCache: true });
     expect(calls).toBe(2);
   });
+
+  it("isolates cached and concurrent reads by request-specific authorization headers", async () => {
+    server.use(
+      http.get(`${BASE}/v1/tenants`, ({ request }) => {
+        const authorized = request.headers.get("authorization") === "Bearer administrator";
+        return HttpResponse.json({ tenants: [], total: authorized ? 2 : 1 });
+      }),
+    );
+    const client = newClient({ cache: true, singleflight: true });
+    const admin = { headers: { authorization: "Bearer administrator" } };
+    const viewer = { headers: { authorization: "Bearer viewer" } };
+    const [adminResult, viewerResult] = await Promise.all([
+      client.listTenants(admin),
+      client.listTenants(viewer),
+    ]);
+    expect(adminResult.total).toBe(2);
+    expect(viewerResult.total).toBe(1);
+    expect((await client.listTenants(viewer)).total).toBe(1);
+    expect((await client.listTenants(admin)).total).toBe(2);
+  });
+
+  it("invalidates all read caches after a successful mutation", async () => {
+    let total = 0;
+    server.use(
+      http.get(`${BASE}/v1/tenants`, () => HttpResponse.json({ tenants: [], total })),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, () =>
+        HttpResponse.json({ results: [], total }),
+      ),
+      http.post(`${BASE}/v1/tenants`, () => {
+        total++;
+        return HttpResponse.json({ id: "t_new", name: "new" }, { status: 201 });
+      }),
+    );
+    const client = newClient({ cache: true });
+    expect((await client.listTenants()).total).toBe(0);
+    expect((await client.search({ indexId: "i_x", query: "hello" })).total).toBe(0);
+    await client.createTenant({ name: "new" });
+    expect((await client.listTenants()).total).toBe(1);
+    expect((await client.search({ indexId: "i_x", query: "hello" })).total).toBe(1);
+  });
+
+  it("preserves cached reads after failed mutations and read-only POSTs", async () => {
+    let calls = 0;
+    server.use(
+      http.get(`${BASE}/v1/tenants`, () => HttpResponse.json({ tenants: [], total: ++calls })),
+      http.post(`${BASE}/v1/tenants`, () =>
+        HttpResponse.json(
+          { error: { code: "validation_error", message: "invalid" } },
+          { status: 400 },
+        ),
+      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, () =>
+        HttpResponse.json({ results: [], total: 0 }),
+      ),
+    );
+    const client = newClient({ cache: true });
+    expect((await client.listTenants()).total).toBe(1);
+    await expect(client.createTenant({ name: "bad" })).rejects.toBeInstanceOf(ValidationError);
+    expect((await client.listTenants()).total).toBe(1);
+    await client.search({ indexId: "i_x", query: "hello" });
+    expect((await client.listTenants()).total).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it.each([
+    { cache: true, singleflight: true },
+    { cache: true, singleflight: false },
+    { cache: false, singleflight: true },
+  ])("isolates delayed reads across mutations with %j", async (options) => {
+    let releaseOld!: () => void;
+    let markStarted!: () => void;
+    const oldBlocked = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const oldStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let total = 0;
+    let calls = 0;
+    server.use(
+      http.get(`${BASE}/v1/tenants`, async () => {
+        calls++;
+        const snapshot = total;
+        if (calls === 1) {
+          markStarted();
+          await oldBlocked;
+        }
+        return HttpResponse.json({ tenants: [], total: snapshot });
+      }),
+      http.post(`${BASE}/v1/tenants`, () => {
+        total++;
+        return HttpResponse.json({ id: "t_new", name: "new" }, { status: 201 });
+      }),
+    );
+    const client = newClient({ ...options, cacheSize: 1 });
+    const oldRead = client.listTenants();
+    await oldStarted;
+    try {
+      await client.createTenant({ name: "new" });
+      // Must not join the read that started before the mutation.
+      expect((await client.listTenants()).total).toBe(1);
+    } finally {
+      releaseOld();
+      await oldRead;
+    }
+    expect((await oldRead).total).toBe(0);
+    // The old completion must neither overwrite nor evict the fresh cache entry.
+    expect((await client.listTenants()).total).toBe(1);
+    expect(calls).toBe(options.cache ? 2 : 3);
+  });
 });
 
 describe("Tenant override", () => {
@@ -369,9 +475,7 @@ describe("Tenant override", () => {
 
 describe("Search request building", () => {
   it("rejects search() with neither query nor vector", async () => {
-    await expect(newClient().search({ indexId: "i_x" })).rejects.toThrow(
-      /query.*vector/i,
-    );
+    await expect(newClient().search({ indexId: "i_x" })).rejects.toThrow(/query.*vector/i);
   });
 
   it("sends `query` for text search", async () => {
@@ -420,6 +524,7 @@ describe("Search request building", () => {
           shards_total: 4,
           shards_ok: 3,
           degraded_shards: ["shard-2"],
+          rerank_applied: true,
         }),
       ),
     );
@@ -428,6 +533,7 @@ describe("Search request building", () => {
     expect(r.shards_total).toBe(4);
     expect(r.shards_ok).toBe(3);
     expect(r.degraded_shards).toEqual(["shard-2"]);
+    expect(r.rerank_applied).toBe(true);
   });
 
   it("leaves sharded-path fields undefined on local responses", async () => {
@@ -441,6 +547,7 @@ describe("Search request building", () => {
     expect(r.shards_total).toBeUndefined();
     expect(r.shards_ok).toBeUndefined();
     expect(r.degraded_shards).toBeUndefined();
+    expect(r.rerank_applied).toBeUndefined();
   });
 
   it("sends filter.equals in search body", async () => {
@@ -468,19 +575,16 @@ describe("upsertResource", () => {
     let captured: unknown = null;
     let capturedMethod = "";
     server.use(
-      http.put(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`,
-        async ({ request }) => {
-          capturedMethod = request.method;
-          captured = await request.json();
-          return HttpResponse.json({
-            resource_id: "doc-1",
-            chunks_added: 3,
-            chunks_tombstoned: 0,
-            operation: "create",
-          });
-        },
-      ),
+      http.put(`${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`, async ({ request }) => {
+        capturedMethod = request.method;
+        captured = await request.json();
+        return HttpResponse.json({
+          resource_id: "doc-1",
+          chunks_added: 3,
+          chunks_tombstoned: 0,
+          operation: "create",
+        });
+      }),
     );
     const resp = await newClient().upsertResource("i_x", "doc-1", {
       text: "hello world",
@@ -495,15 +599,13 @@ describe("upsertResource", () => {
 
   it("returns update operation on second call", async () => {
     server.use(
-      http.put(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`,
-        () =>
-          HttpResponse.json({
-            resource_id: "doc-1",
-            chunks_added: 2,
-            chunks_tombstoned: 3,
-            operation: "update",
-          }),
+      http.put(`${BASE}/v1/tenants/t_default/indexes/i_x/resources/doc-1`, () =>
+        HttpResponse.json({
+          resource_id: "doc-1",
+          chunks_added: 2,
+          chunks_tombstoned: 3,
+          operation: "update",
+        }),
       ),
     );
     const resp = await newClient().upsertResource("i_x", "doc-1", { text: "updated" });
@@ -581,18 +683,15 @@ describe("compactIndex", () => {
     let contentType: string | null = null;
     let rawBody = "";
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/compact`,
-        async ({ request }) => {
-          contentType = request.headers.get("content-type");
-          rawBody = await request.text();
-          return HttpResponse.json({
-            index_id: "i_x",
-            status: "compacting",
-            message: "Index compaction started",
-          });
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/compact`, async ({ request }) => {
+        contentType = request.headers.get("content-type");
+        rawBody = await request.text();
+        return HttpResponse.json({
+          index_id: "i_x",
+          status: "compacting",
+          message: "Index compaction started",
+        });
+      }),
     );
     const r = await newClient().compactIndex("i_x");
     expect(contentType).toBe("application/json");
@@ -618,14 +717,11 @@ describe("flushIndex", () => {
     let contentType: string | null = null;
     let path = "";
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/flush`,
-        ({ request }) => {
-          contentType = request.headers.get("content-type");
-          path = new URL(request.url).pathname;
-          return HttpResponse.json({ flushed: true });
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/flush`, ({ request }) => {
+        contentType = request.headers.get("content-type");
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ flushed: true });
+      }),
     );
     const r = await newClient().flushIndex("i_x");
     expect(path).toBe("/v1/tenants/t_default/indexes/i_x/flush");
@@ -638,13 +734,10 @@ describe("rebuildGraph", () => {
   it("POSTs /rebuild-graph and decodes the response", async () => {
     let path = "";
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/rebuild-graph`,
-        ({ request }) => {
-          path = new URL(request.url).pathname;
-          return HttpResponse.json({ rebuilt: true, chunks: 52000, wall_ms: 1234 });
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/rebuild-graph`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ rebuilt: true, chunks: 52000, wall_ms: 1234 });
+      }),
     );
     const r = await newClient().rebuildGraph("i_x");
     expect(path).toBe("/v1/tenants/t_default/indexes/i_x/rebuild-graph");
@@ -670,16 +763,13 @@ describe("Document operations", () => {
   it("addDocuments wraps the array in `documents`", async () => {
     let captured: unknown = null;
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        async ({ request }) => {
-          captured = await request.json();
-          return HttpResponse.json(
-            { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
-            { status: 201 },
-          );
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
+          { status: 201 },
+        );
+      }),
     );
     const docs = [{ text: "a" }, { text: "b" }];
     const r = await newClient().addDocuments("i_x", docs);
@@ -690,16 +780,13 @@ describe("Document operations", () => {
   it("addDocuments accepts an AddDocumentsRequest with defer_save and bulk", async () => {
     let captured: unknown = null;
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        async ({ request }) => {
-          captured = await request.json();
-          return HttpResponse.json(
-            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
-            { status: 201 },
-          );
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
+          { status: 201 },
+        );
+      }),
     );
     const docs = [{ text: "a" }];
     await newClient().addDocuments("i_x", { documents: docs, defer_save: true, bulk: true });
@@ -709,16 +796,13 @@ describe("Document operations", () => {
   it("addDocuments passes per-document vectors through (precomputed ingest)", async () => {
     let captured: unknown = null;
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        async ({ request }) => {
-          captured = await request.json();
-          return HttpResponse.json(
-            { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
-            { status: 201 },
-          );
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          { added: 2, index_id: "i_x", chunk_ids: ["chunk-0", "chunk-1"] },
+          { status: 201 },
+        );
+      }),
     );
     const docs = [
       { id: "ext-1", text: "a", vector: [0.1, 0.2] },
@@ -730,18 +814,16 @@ describe("Document operations", () => {
 
   it("addDocuments decodes external_ids when the server minted IDs", async () => {
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        () =>
-          HttpResponse.json(
-            {
-              added: 2,
-              index_id: "i_x",
-              chunk_ids: ["chunk-0", "chunk-1"],
-              external_ids: ["minted-1", "client-2"],
-            },
-            { status: 201 },
-          ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, () =>
+        HttpResponse.json(
+          {
+            added: 2,
+            index_id: "i_x",
+            chunk_ids: ["chunk-0", "chunk-1"],
+            external_ids: ["minted-1", "client-2"],
+          },
+          { status: 201 },
+        ),
       ),
     );
     const r = await newClient().addDocuments("i_x", [{ text: "a" }, { id: "client-2", text: "b" }]);
@@ -751,18 +833,15 @@ describe("Document operations", () => {
   it("bulkDeleteDocuments sends DELETE with body", async () => {
     let body: unknown = null;
     server.use(
-      http.delete(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        async ({ request }) => {
-          body = await request.json();
-          return HttpResponse.json({
-            index_id: "i_x",
-            documents_deleted: 2,
-            chunks_deleted: 5,
-            deleted_per_doc: { "1": 3, "2": 2 },
-          });
-        },
-      ),
+      http.delete(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({
+          index_id: "i_x",
+          documents_deleted: 2,
+          chunks_deleted: 5,
+          deleted_per_doc: { "1": 3, "2": 2 },
+        });
+      }),
     );
     await newClient().bulkDeleteDocuments("i_x", [1, 2]);
     expect(body).toEqual({ document_ids: [1, 2] });
@@ -793,31 +872,28 @@ describe("Document operations", () => {
 
   it("listDocuments yields async pages", async () => {
     server.use(
-      http.get(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        ({ request }) => {
-          const url = new URL(request.url);
-          const cursor = url.searchParams.get("cursor");
-          if (!cursor) {
-            return HttpResponse.json({
-              documents: [{ id: "a" }, { id: "b" }],
-              next_cursor: "c2",
-            });
-          }
-          if (cursor === "c2") {
-            return HttpResponse.json({
-              documents: [{ id: "c" }],
-              next_cursor: "",
-            });
-          }
-          return HttpResponse.json({ documents: [], next_cursor: "" });
-        },
-      ),
+      http.get(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, ({ request }) => {
+        const url = new URL(request.url);
+        const cursor = url.searchParams.get("cursor");
+        if (!cursor) {
+          return HttpResponse.json({
+            documents: [{ id: "a" }, { id: "b" }],
+            next_cursor: "c2",
+          });
+        }
+        if (cursor === "c2") {
+          return HttpResponse.json({
+            documents: [{ id: "c" }],
+            next_cursor: "",
+          });
+        }
+        return HttpResponse.json({ documents: [], next_cursor: "" });
+      }),
     );
 
     const collected: string[] = [];
     for await (const page of newClient().listDocuments({ indexId: "i_x" })) {
-      for (const d of page.items) collected.push(d.id);
+      for (const d of page.items) collected.push(d.id ?? "");
     }
     expect(collected).toEqual(["a", "b", "c"]);
   });
@@ -866,9 +942,7 @@ describe("Cluster + jobs", () => {
 
 describe("Metrics hook", () => {
   it("fires lifecycle events", async () => {
-    server.use(
-      http.get(`${BASE}/health`, () => HttpResponse.json({ status: "healthy" })),
-    );
+    server.use(http.get(`${BASE}/health`, () => HttpResponse.json({ status: "healthy" })));
     const spy = vi.fn();
     const client = newClient({ metricsHook: spy });
     await client.health();
@@ -879,22 +953,35 @@ describe("Metrics hook", () => {
 });
 
 describe("Gzip threshold", () => {
+  it("sends large bodies as plain JSON by default", async () => {
+    const text = "x".repeat(70_000);
+    let captured: unknown;
+    let encoding: string | null = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        encoding = request.headers.get("content-encoding");
+        captured = await request.json();
+        return HttpResponse.json({ added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] });
+      }),
+    );
+    await newClient().addDocuments("i_x", [{ text }]);
+    expect(encoding).toBeNull();
+    expect(captured).toEqual({ documents: [{ text }] });
+  });
+
   it("compresses bodies above the threshold", async () => {
     let encoding: string | null = null;
     let length = 0;
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        async ({ request }) => {
-          encoding = request.headers.get("content-encoding");
-          const buf = await request.arrayBuffer();
-          length = buf.byteLength;
-          return HttpResponse.json(
-            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
-            { status: 201 },
-          );
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, async ({ request }) => {
+        encoding = request.headers.get("content-encoding");
+        const buf = await request.arrayBuffer();
+        length = buf.byteLength;
+        return HttpResponse.json(
+          { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
+          { status: 201 },
+        );
+      }),
     );
     const big = "x".repeat(70_000);
     await newClient({ gzipThreshold: 1_024 }).addDocuments("i_x", [{ text: big }]);
@@ -905,16 +992,13 @@ describe("Gzip threshold", () => {
   it("skips gzip when below the threshold", async () => {
     let encoding: string | null = null;
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/documents`,
-        ({ request }) => {
-          encoding = request.headers.get("content-encoding");
-          return HttpResponse.json(
-            { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
-            { status: 201 },
-          );
-        },
-      ),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, ({ request }) => {
+        encoding = request.headers.get("content-encoding");
+        return HttpResponse.json(
+          { added: 1, index_id: "i_x", chunk_ids: ["chunk-0"] },
+          { status: 201 },
+        );
+      }),
     );
     await newClient({ gzipThreshold: 1024 * 1024 }).addDocuments("i_x", [{ text: "small" }]);
     expect(encoding).toBeNull();
@@ -936,9 +1020,7 @@ describe("204 No Content", () => {
 
 describe("ready()", () => {
   it("GETs /ready and returns the parsed body", async () => {
-    server.use(
-      http.get(`${BASE}/ready`, () => HttpResponse.json({ status: "ready" })),
-    );
+    server.use(http.get(`${BASE}/ready`, () => HttpResponse.json({ status: "ready" })));
     const r = await newClient().ready();
     expect(r).toEqual({ status: "ready" });
   });
@@ -947,17 +1029,15 @@ describe("ready()", () => {
 describe("Chunk operations", () => {
   it("getChunk GETs /chunks/{id} and returns the chunk shape", async () => {
     server.use(
-      http.get(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/42`,
-        () =>
-          HttpResponse.json({
-            chunk_id: 42,
-            text: "hello",
-            document_id: 7,
-            chunk_index: 0,
-            start: 0,
-            end: 5,
-          }),
+      http.get(`${BASE}/v1/tenants/t_default/indexes/i_x/chunks/42`, () =>
+        HttpResponse.json({
+          chunk_id: 42,
+          text: "hello",
+          document_id: 7,
+          chunk_index: 0,
+          start: 0,
+          end: 5,
+        }),
       ),
     );
     const r = await newClient().getChunk("i_x", 42);
@@ -969,13 +1049,10 @@ describe("Chunk operations", () => {
   it("deleteChunks DELETEs /chunks/0 with chunk_ids body", async () => {
     let body: unknown = null;
     server.use(
-      http.delete(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/chunks/0`,
-        async ({ request }) => {
-          body = await request.json();
-          return HttpResponse.json({ deleted: 2, index_id: "i_x" });
-        },
-      ),
+      http.delete(`${BASE}/v1/tenants/t_default/indexes/i_x/chunks/0`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ deleted: 2, index_id: "i_x" });
+      }),
     );
     const r = await newClient().deleteChunks("i_x", [9, 10]);
     expect(body).toEqual({ chunk_ids: [9, 10] });
@@ -986,9 +1063,8 @@ describe("Chunk operations", () => {
 describe("Pending queue", () => {
   it("getPendingStatus GETs /pending", async () => {
     server.use(
-      http.get(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/pending`,
-        () => HttpResponse.json({ index_id: "i_x", pending_count: 3 }),
+      http.get(`${BASE}/v1/tenants/t_default/indexes/i_x/pending`, () =>
+        HttpResponse.json({ index_id: "i_x", pending_count: 3 }),
       ),
     );
     const r = await newClient().getPendingStatus("i_x");
@@ -997,15 +1073,13 @@ describe("Pending queue", () => {
 
   it("processPending POSTs /process", async () => {
     server.use(
-      http.post(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/process`,
-        () =>
-          HttpResponse.json({
-            index_id: "i_x",
-            processed: 2,
-            chunks_created: 4,
-            chunk_ids: ["c-10", "c-11", "c-12", "c-13"],
-          }),
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/process`, () =>
+        HttpResponse.json({
+          index_id: "i_x",
+          processed: 2,
+          chunks_created: 4,
+          chunk_ids: ["c-10", "c-11", "c-12", "c-13"],
+        }),
       ),
     );
     const r = await newClient().processPending("i_x");
@@ -1016,14 +1090,12 @@ describe("Pending queue", () => {
 
   it("clearPending DELETEs /pending", async () => {
     server.use(
-      http.delete(
-        `${BASE}/v1/tenants/t_default/indexes/i_x/pending`,
-        () =>
-          HttpResponse.json({
-            index_id: "i_x",
-            status: "cleared",
-            message: "Pending documents cleared",
-          }),
+      http.delete(`${BASE}/v1/tenants/t_default/indexes/i_x/pending`, () =>
+        HttpResponse.json({
+          index_id: "i_x",
+          status: "cleared",
+          message: "Pending documents cleared",
+        }),
       ),
     );
     const r = await newClient().clearPending("i_x");
@@ -1048,18 +1120,15 @@ describe("Org index listings", () => {
   it("listUserIndexes GETs /v1/orgs/{org}/users/{user}/indexes", async () => {
     let path = "";
     server.use(
-      http.get(
-        `${BASE}/v1/orgs/org_a/users/u_1/indexes`,
-        ({ request }) => {
-          path = new URL(request.url).pathname;
-          return HttpResponse.json({
-            indexes: [],
-            total: 0,
-            org_id: "org_a",
-            user_id: "u_1",
-          });
-        },
-      ),
+      http.get(`${BASE}/v1/orgs/org_a/users/u_1/indexes`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({
+          indexes: [],
+          total: 0,
+          org_id: "org_a",
+          user_id: "u_1",
+        });
+      }),
     );
     const r = await newClient().listUserIndexes("org_a", "u_1");
     expect(path).toBe("/v1/orgs/org_a/users/u_1/indexes");
@@ -1085,18 +1154,15 @@ describe("LLM settings (org-scoped)", () => {
     let method = "";
     let body: unknown = null;
     server.use(
-      http.patch(
-        `${BASE}/v1/orgs/org_a/llm-settings`,
-        async ({ request }) => {
-          method = request.method;
-          body = await request.json();
-          return HttpResponse.json({
-            message: "updated",
-            org_id: "org_a",
-            settings: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 },
-          });
-        },
-      ),
+      http.patch(`${BASE}/v1/orgs/org_a/llm-settings`, async ({ request }) => {
+        method = request.method;
+        body = await request.json();
+        return HttpResponse.json({
+          message: "updated",
+          org_id: "org_a",
+          settings: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 },
+        });
+      }),
     );
     const r = await newClient().updateLLMSettings("org_a", { temperature: 0.2 });
     expect(method).toBe("PATCH");
@@ -1107,13 +1173,10 @@ describe("LLM settings (org-scoped)", () => {
   it("deleteLLMSettings DELETEs the new path", async () => {
     let path = "";
     server.use(
-      http.delete(
-        `${BASE}/v1/orgs/org_a/llm-settings`,
-        ({ request }) => {
-          path = new URL(request.url).pathname;
-          return HttpResponse.json({ message: "reset", org_id: "org_a" });
-        },
-      ),
+      http.delete(`${BASE}/v1/orgs/org_a/llm-settings`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ message: "reset", org_id: "org_a" });
+      }),
     );
     const r = await newClient().deleteLLMSettings("org_a");
     expect(path).toBe("/v1/orgs/org_a/llm-settings");
@@ -1198,20 +1261,11 @@ describe("API keys", () => {
     expect(key.created_at).toBe("2026-06-17T00:00:00Z");
   });
 
-  it("createAPIKey omits user_id from the body when not supplied", async () => {
-    let captured: unknown = null;
-    server.use(
-      http.post(`${BASE}/v1/tenants/t_default/api-keys`, async ({ request }) => {
-        captured = await request.json();
-        return HttpResponse.json(
-          { id: "key_2", name: "no-user", plaintext: "ak_x", created_at: "2026-06-17T00:00:00Z" },
-          { status: 201 },
-        );
-      }),
-    );
-    await newClient().createAPIKey({ name: "no-user" });
-    expect(captured).toEqual({ name: "no-user" });
-  });
+  // NOTE: `user_id` used to be optional client-side ("omits user_id from the
+  // body when not supplied"). The spec marks it required on
+  // CreateAPIKeyRequest (the server always expects it), so that test no
+  // longer describes valid usage and was removed rather than adjusted to
+  // assert a now-impossible call.
 
   it("listAPIKeys parses the api_keys wrapper and item fields", async () => {
     server.use(

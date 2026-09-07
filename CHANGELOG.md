@@ -4,6 +4,61 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## v0.9.1 - 2026-09-07
+
+### Fixed
+
+- Request gzip is now disabled by default; a positive `gzipThreshold` still
+  opts in for servers or proxies that decode compressed requests.
+- Successful mutations invalidate all cached reads. Reads started before a
+  mutation cannot refill the cache or coalesce with reads started after it.
+  Read-only POSTs and failed mutations preserve the cache.
+- Search responses use the generated sharded metadata, including
+  `rerank_applied`, instead of an outdated handwritten overlay.
+- Type generation and staleness checks find the bundled spec in standalone
+  checkouts and the shared spec in the monorepo. Generated headers use a
+  portable source path instead of the checkout's absolute path.
+
+### Changed
+
+- Installation uses the built `graphann-client-0.9.1.tgz` package from the
+  GitHub release instead of requiring a local build. No npm registry
+  publication is required.
+
+## v0.9.0 - 2026-08-11
+
+### Added
+
+- The nine endpoints no SDK in any language implemented, all absent because the
+  server's OpenAPI spec omitted them: `createBackup`, `listBackups`,
+  `restoreBackup`, `deleteBackup`, `batchSearch`, `compactAllIndexes`,
+  `getLicenseStatus`, `getLicenseAudit`, `getEmbedSpaceAdmin`.
+- Six previously-unreachable request fields: `hybrid` (BM25 + RRF lexical
+  fusion, text queries only), `vector_b64` (base64 little-endian float32 query
+  vector, mutually exclusive with `vector`), `omit_text` on the search filter,
+  and the `embedding_endpoint` / `embedding_dimension` / `embedding_api_key_env`
+  per-index embedder override.
+
+### Changed
+
+- Wire types are generated from the OpenAPI spec into `src/generated/types.ts`
+  by `scripts/gen-types.mjs`, rather than hand-maintained. The spec is vendored
+  at `api/openapi/spec.yaml`, so generation works from a fresh clone. A
+  staleness check runs as `pretest` and fails if the committed file does not
+  match what the generator produces.
+- `src/types.ts` is now a facade aliasing the generated schemas. The hand-written
+  cache, singleflight, retry, pagination and HTTP layers are unchanged.
+
+### Fixed
+
+- `BulkDeleteDocumentsResponse` is exported from the package root again. It was
+  dropped from `index.ts` while remaining the declared return type of
+  `client.bulkDeleteDocuments`, so callers could call the method but could not
+  name what it returned.
+- The search docs described "hybrid search" as passing either a query or a
+  vector. That is dense search with two input modes. The real `hybrid` flag is
+  now documented; the old wording came from the spec and has been corrected there.
+
 ## v0.8.0 - 2026-06-17
 
 ### Fixed

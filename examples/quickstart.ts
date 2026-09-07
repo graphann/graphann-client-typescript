@@ -66,8 +66,10 @@ async function main(): Promise<void> {
   }
 
   // 5. Upsert a resource (atomic create-or-replace by resource ID).
+  const indexId = index.id;
+  if (!indexId) throw new Error("createIndex did not return an id");
   const upserted = await client.upsertResource(
-    index.id,
+    indexId,
     "resource-quickstart",
     { text: "GraphANN stores graph topology, not embeddings.", metadata: { src: "quickstart" } },
     { tenantId: tenant.id },
@@ -82,37 +84,39 @@ async function main(): Promise<void> {
     id: `doc-${i}`,
     text: `Document ${i}: vector databases recompute embeddings on demand to save storage.`,
   }));
-  const ingest = await client.addDocuments(index.id, docs, { tenantId: tenant.id });
-  console.log(`Ingested ${ingest.added} chunks (ids ${ingest.chunk_ids.join(",")})`);
+  const ingest = await client.addDocuments(indexId, docs, { tenantId: tenant.id });
+  console.log(`Ingested ${ingest.added} chunks (ids ${(ingest.chunk_ids ?? []).join(",")})`);
 
   // 8. Search.
   const r1 = await client.search(
-    { indexId: index.id, query: "vector database storage savings", k: 5 },
+    { indexId, query: "vector database storage savings", k: 5 },
     { tenantId: tenant.id },
   );
   console.log(`Top results before swap:`);
-  for (const hit of r1.results) {
-    console.log(`  ${hit.id} score=${hit.score.toFixed(4)}`);
+  for (const hit of r1.results ?? []) {
+    console.log(`  ${hit.id} score=${(hit.score ?? 0).toFixed(4)}`);
   }
 
   // 9. Switch the embedding model. This is async — poll the job until done.
   try {
     const job = await client.switchEmbeddingModel(
       {
-        indexId: index.id,
+        indexId,
         embedding_backend: "ollama",
         model: "nomic-embed-text",
         dimension: 768,
       },
       { tenantId: tenant.id },
     );
-    console.log(`Reembed job queued: ${job.job_id}`);
+    const jobId = job.job_id;
+    if (!jobId) throw new Error("switchEmbeddingModel did not return a job_id");
+    console.log(`Reembed job queued: ${jobId}`);
 
     // Poll up to 30s.
     for (let i = 0; i < 30; i++) {
-      const status = await client.getJob(job.job_id);
+      const status = await client.getJob(jobId);
       console.log(
-        `  job ${status.status} progress=${status.progress.chunks_done}/${status.progress.chunks_total}`,
+        `  job ${status.status} progress=${status.progress?.chunks_done ?? 0}/${status.progress?.chunks_total ?? 0}`,
       );
       if (status.status === "completed" || status.status === "failed") break;
       await new Promise((r) => setTimeout(r, 1_000));
@@ -129,12 +133,12 @@ async function main(): Promise<void> {
 
   // 10. Re-search after the swap.
   const r2 = await client.search(
-    { indexId: index.id, query: "vector database storage savings", k: 5 },
+    { indexId, query: "vector database storage savings", k: 5 },
     { tenantId: tenant.id },
   );
   console.log(`Top results after swap:`);
-  for (const hit of r2.results) {
-    console.log(`  ${hit.id} score=${hit.score.toFixed(4)}`);
+  for (const hit of r2.results ?? []) {
+    console.log(`  ${hit.id} score=${(hit.score ?? 0).toFixed(4)}`);
   }
 }
 
