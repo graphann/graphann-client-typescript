@@ -8,7 +8,7 @@ current source (`src/client.ts`, `src/types.ts`, `src/options.ts`,
 ## Install
 
 ```bash
-pnpm add @graphann/client@0.9.0
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.1/graphann-client-0.10.1.tgz
 ```
 
 ESM-first with a CommonJS fallback. Runs on Node 20+, Deno, Bun,
@@ -38,7 +38,10 @@ bypassSingleflight?, bypassCache? }`.
 
 ```ts
 const tenant = await client.createTenant({ name: "acme" });
+// tenant: { id, name, created_at } (CreateTenantResponse, no updated_at)
 // tenant.id is the tenant id used below as { tenantId: tenant.id }
+// getTenant() returns Tenant (adds updated_at); listTenants() entries are
+// TenantListEntry (add index_count and metadata; getTenant has neither)
 ```
 
 ## Create an index
@@ -96,8 +99,8 @@ for (const hit of out.results) {
 }
 ```
 
-Vector search: pass `vector` instead of `query` (one of the two is
-required, or `search()` throws). Filter with
+Vector search: pass `vector` (or `vector_b64`) instead of `query` (one of
+the three is required, or `search()` throws). Filter with
 `filter: { equals?, repo_ids?, exclude_external_ids?, metadata_filter? }`.
 
 Rerank and `ef_search`:

@@ -1380,7 +1380,9 @@ export interface components {
         | "service_unavailable"
         | "payload_too_large"
         | "insufficient_storage"
-        | "not_implemented";
+        | "not_implemented"
+        | "bad_gateway"
+        | "unprocessable_entity";
       /** @description Human-readable error message. */
       message: string;
       /** @description Optional structured details about the error. */
@@ -1410,9 +1412,9 @@ export interface components {
     };
     TenantQuotaResponse: {
       /** @description Storage quota in GB. 0 means no quota. */
-      max_storage_gb?: number;
+      max_storage_gb: number;
       /** @description Current on-disk usage in GB, refreshed periodically. */
-      used_storage_gb?: number;
+      used_storage_gb: number;
     };
     UpdateTenantQuotaRequest: {
       max_storage_gb: number;
@@ -2837,16 +2839,16 @@ export interface components {
       indexes?: components["schemas"]["EmbedSpaceIndexRow"][];
     };
     APIKeyStatusTenantRow: {
-      tenant_id?: string;
-      tenant_name?: string;
+      tenant_id: string;
+      tenant_name: string;
       /** @description Number of active (non-revoked) API keys this tenant holds. */
-      active_keys?: number;
+      active_keys: number;
       /**
        * @description Whether the tenant may be addressed only with one of its own
        *     keys (the per-tenant key rule): active_keys > 0 AND the rule's
        *     kill switch (GRAPHANN_TENANT_KEY_ENFORCEMENT=off) is not set.
        */
-      locked?: boolean;
+      locked: boolean;
     };
     APIKeyStatusResponse: {
       /**
@@ -2854,13 +2856,13 @@ export interface components {
        *     caller's own tenant for a tenant-authenticated caller, or
        *     every tenant except keyed ones for an anonymous caller.
        */
-      tenants?: components["schemas"]["APIKeyStatusTenantRow"][];
-      strict_auth?: boolean;
+      tenants: components["schemas"]["APIKeyStatusTenantRow"][];
+      strict_auth: boolean;
       /** @description Whether the node admin token (--admin-token) is set. Never the token itself. */
-      admin_token_configured?: boolean;
-      metrics_public?: boolean;
+      admin_token_configured: boolean;
+      metrics_public: boolean;
       /** @description False only when GRAPHANN_TENANT_KEY_ENFORCEMENT=off. */
-      tenant_key_enforcement?: boolean;
+      tenant_key_enforcement: boolean;
     };
     BackupChunkInfo: {
       /** @description Storage key for this chunk. */

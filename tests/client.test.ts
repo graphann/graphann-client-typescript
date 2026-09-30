@@ -1554,3 +1554,82 @@ describe("New request and response fields", () => {
     expect(r.warnings).toEqual(["chunk_size ignored"]);
   });
 });
+
+describe("Tenant response shapes", () => {
+  it("createTenant, getTenant and listTenants decode their distinct shapes", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants`, () =>
+        HttpResponse.json(
+          { id: "t_1", name: "acme", created_at: "2026-01-01T00:00:00Z" },
+          { status: 201 },
+        ),
+      ),
+      http.get(`${BASE}/v1/tenants/t_1`, () =>
+        HttpResponse.json({
+          id: "t_1",
+          name: "acme",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        }),
+      ),
+      http.get(`${BASE}/v1/tenants`, () =>
+        HttpResponse.json({
+          tenants: [
+            {
+              id: "t_1",
+              name: "acme",
+              updated_at: "2026-01-02T00:00:00Z",
+              index_count: 3,
+              metadata: { env: "prod" },
+            },
+          ],
+          total: 1,
+        }),
+      ),
+    );
+    const client = newClient();
+    const created = await client.createTenant({ name: "acme" });
+    expect(created).toEqual({ id: "t_1", name: "acme", created_at: "2026-01-01T00:00:00Z" });
+    // @ts-expect-error updated_at is not part of the create response
+    void created.updated_at;
+    const got = await client.getTenant("t_1");
+    expect(got.updated_at).toBe("2026-01-02T00:00:00Z");
+    // @ts-expect-error index_count is list-only
+    void got.index_count;
+    const list = await client.listTenants();
+    expect(list.tenants?.[0]?.index_count).toBe(3);
+    expect(list.tenants?.[0]?.metadata).toEqual({ env: "prod" });
+  });
+});
+
+describe("multiSearch", () => {
+  it("forwards k and the deprecated max_results", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/orgs/o_1/users/u_1/search`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ results: [], total: 0 });
+      }),
+    );
+    await newClient().multiSearch({
+      orgId: "o_1",
+      userId: "u_1",
+      query: "hello",
+      k: 5,
+      max_results: 7,
+    });
+    expect(body).toEqual({ query: "hello", k: 5, max_results: 7 });
+  });
+
+  it("omits max_results when unset", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/orgs/o_1/users/u_1/search`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ results: [], total: 0 });
+      }),
+    );
+    await newClient().multiSearch({ orgId: "o_1", userId: "u_1", query: "hello" });
+    expect(body).toEqual({ query: "hello" });
+  });
+});

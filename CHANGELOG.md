@@ -4,6 +4,28 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.10.1 - 2026-09-30
+
+### Added
+
+- `CreateTenantResponse` and `TenantListEntry` types.
+- Regenerated types add the `bad_gateway` and `unprocessable_entity` error codes.
+
+### Changed
+
+- `TenantQuotaResponse`, `APIKeyStatusTenantRow` and `APIKeyStatusResponse`
+  fields are non-optional, matching the spec's `required` lists.
+- `Tenant` is the spec `TenantDetailResponse` (what `getTenant` returns). It no
+  longer declares `index_count` or `metadata`, which only list entries carry.
+- `createTenant` returns `CreateTenantResponse` (no `updated_at`); `listTenants`
+  entries are typed `TenantListEntry`.
+
+### Fixed
+
+- `multiSearch` forwards the deprecated `max_results`; prefer `k`.
+- README API table lists every public method; AGENTS.md install line and
+  tenant notes match the current release and types.
+
 ## 0.10.0 - 2026-09-30
 
 ### Added

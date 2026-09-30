@@ -16,7 +16,7 @@ vector database.
 Install the built package from the GitHub release:
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.0/graphann-client-0.10.0.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.1/graphann-client-0.10.1.tgz
 ```
 
 ## Quickstart
@@ -160,18 +160,18 @@ Status mapping:
 
 | Group     | Methods |
 |-----------|---------|
-| Health    | `health` |
+| Health    | `health`, `ready` |
 | Tenants   | `listTenants`, `createTenant`, `getTenant`, `deleteTenant`, `getTenantQuota`, `updateTenantQuota` |
-| Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `compactIndex`, `clearIndex`, `getLiveStats` |
-| Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans` |
-| Search    | `search` (text via `query`, vector via `vector`), `multiSearch` |
+| Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `compactIndex`, `clearIndex`, `flushIndex`, `rebuildGraph`, `getLiveStats`, `compactAllIndexes` |
+| Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans`, `getChunk`, `deleteChunks`, `getPendingStatus`, `processPending`, `clearPending`, `runIndexGC`, `runAdminGC` |
+| Search    | `search` (text via `query`, vector via `vector`), `batchSearch`, `multiSearch` |
 | Jobs      | `switchEmbeddingModel`, `getJob`, `listJobs` |
 | Cluster   | `getClusterNodes`, `getClusterShards`, `getClusterHealth` |
 | LLM       | `getLLMSettings`, `updateLLMSettings`, `deleteLLMSettings` |
 | API keys  | `createAPIKey`, `listAPIKeys`, `revokeAPIKey` |
-| Org sync  | `syncDocuments` |
+| Org sync  | `syncDocuments`, `listSharedIndexes`, `listUserIndexes`, `upsertResource` |
 | Backups   | `createBackup`, `listBackups`, `restoreBackup` (optional restored-index `name`), `deleteBackup` |
-| Admin     | `getEmbedSpaceAdmin`, `getAPIKeyStatus`, `listAllBackups` (keyset `next_cursor`), `getBackupStatus` |
+| Admin     | `getEmbedSpaceAdmin`, `getAPIKeyStatus`, `listAllBackups` (keyset `next_cursor`), `getBackupStatus`, `getLicenseStatus`, `getLicenseAudit` |
 
 ## Performance
 

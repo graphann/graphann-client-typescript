@@ -44,10 +44,14 @@ export type ReadyResponse = components["schemas"]["ReadyResponse"];
 // Tenant
 // ---------------------------------------------------------------------------
 
-export type Tenant = components["schemas"]["TenantDetailResponse"] & {
-  index_count?: number;
-  metadata?: Record<string, string>;
-};
+/** `GET /v1/tenants/{id}` body. Carries neither `index_count` nor `metadata` (those are list-only). */
+export type Tenant = components["schemas"]["TenantDetailResponse"];
+
+/** `POST /v1/tenants` body. Has no `updated_at`. */
+export type CreateTenantResponse = components["schemas"]["TenantResponse"];
+
+/** Element of `listTenants().tenants`; adds `index_count` and `metadata`. */
+export type TenantListEntry = components["schemas"]["TenantListEntry"];
 
 export type CreateTenantRequest = components["schemas"]["CreateTenantRequest"];
 

@@ -39,6 +39,7 @@ import type {
   GCResponse,
   CreateIndexRequest,
   CreateTenantRequest,
+  CreateTenantResponse,
   DeleteChunksResponse,
   DeleteDocumentResponse,
   DeleteLLMSettingsResponse,
@@ -150,8 +151,14 @@ export class Client {
   }
 
   /** POST /v1/tenants */
-  async createTenant(req: CreateTenantRequest, opts: RequestOptions = {}): Promise<Tenant> {
-    return this.send<Tenant>({ method: "POST", path: "/v1/tenants", body: req }, opts);
+  async createTenant(
+    req: CreateTenantRequest,
+    opts: RequestOptions = {},
+  ): Promise<CreateTenantResponse> {
+    return this.send<CreateTenantResponse>(
+      { method: "POST", path: "/v1/tenants", body: req },
+      opts,
+    );
   }
 
   /** GET /v1/tenants/{id} */
@@ -705,6 +712,7 @@ export class Client {
   ): Promise<MultiSearchResponse> {
     const body: Record<string, unknown> = { query: req.query };
     if (req.k !== undefined) body.k = req.k;
+    if (req.max_results !== undefined) body.max_results = req.max_results;
     if (req.sources !== undefined) body.sources = req.sources;
     if (req.ef_search !== undefined) body.ef_search = req.ef_search;
     if (req.include_text !== undefined) body.include_text = req.include_text;
