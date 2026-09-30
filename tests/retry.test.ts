@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  computeBackoff,
-  isRetryableStatus,
-  parseRetryAfter,
-  sleep,
-} from "../src/retry.js";
+import { computeBackoff, isRetryableStatus, parseRetryAfter, sleep } from "../src/retry.js";
 
 describe("parseRetryAfter", () => {
   it("returns null for missing or empty header", () => {

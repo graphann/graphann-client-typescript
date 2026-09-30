@@ -40,7 +40,9 @@ export interface paths {
     /**
      * Readiness check
      * @description Returns whether the server is ready to accept traffic.
-     *     Returns 503 when the tenant manager is not yet initialized.
+     *     Returns 503 when the tenant manager is not yet initialized,
+     *     or 503 with reason "shutting down" while the node drains during
+     *     a graceful stop.
      */
     get: operations["readinessCheck"];
     put?: never;
@@ -121,6 +123,33 @@ export interface paths {
      *     as-is. When `id` is omitted a random UUID is generated.
      */
     post: operations["createTenant"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/tenants/{tenantID}/quota": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a tenant's storage quota
+     * @description Returns the tenant's storage quota and current on-disk usage. max_storage_gb 0 means no quota.
+     */
+    get: operations["getTenantQuota"];
+    /**
+     * Set a tenant's storage quota
+     * @description Sets the tenant's storage quota in GB. 0 removes the quota. The
+     *     quota is per tenant and persists in the tenant's meta.json. Ingest
+     *     over the quota answers 507. Needs the node admin token when the
+     *     node requires one.
+     */
+    put: operations["updateTenantQuota"];
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -261,6 +290,14 @@ export interface paths {
      * @description Adds documents to the index incrementally (no full rebuild required).
      *     Each document may specify either `text` or `content` -- `content`
      *     is an alias for `text` for clients that prefer that field name.
+     *
+     *     `metadata` and `expires_at` are stored in the same per-document
+     *     sidecar on both the text-ingest path (this description) and the
+     *     precomputed-vector path (every document carries `vector`) -- they
+     *     are keyed by the document's `id`, so a document posted without an
+     *     `id` cannot carry metadata or an expiry. A multi-chunk text
+     *     document's `metadata`/`expires_at` apply to every chunk the
+     *     document produces.
      *
      *     Requires an embedding server to be configured.
      */
@@ -971,6 +1008,95 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/admin/api-key-status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Per-tenant API-key status for the admin UI's Security page
+     * @description Reports, per visible tenant, how many active API keys it holds and
+     *     whether the per-tenant key rule locks it, plus the node's overall
+     *     security posture (strict auth, whether a node admin token is
+     *     configured, whether /metrics is public, and whether the per-tenant
+     *     key rule's kill switch is on). Never exposes key material or
+     *     hashes -- only counts and a derived boolean.
+     *
+     *     Follows the standard node-wide listing scope: a node admin sees
+     *     every tenant; a tenant-authenticated caller sees only its own row;
+     *     an anonymous caller (optional/non-strict mode only) sees every
+     *     tenant except keyed ones. In strict mode, reaching this endpoint
+     *     at all already requires a node admin token or a valid tenant key.
+     */
+    get: operations["getAPIKeyStatus"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/admin/backups": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List backups across all tenants
+     * @description Cross-tenant backup list for the admin UI, with tenant and index
+     *     display names attached. Admin only. The route exists only when the
+     *     server runs with --backup-dir.
+     *
+     *     Scoping (ruling R23): when the request carries an authenticated
+     *     tenant (the same signal the per-tenant backup routes use to reject
+     *     a cross-tenant path), the list and the tenant/index name lookups
+     *     are restricted to that tenant alone -- a tenant_id naming a
+     *     different tenant then returns an empty list, not an error, so the
+     *     caller cannot tell "wrong tenant_id" from "that tenant has no
+     *     backups". With no tenant in context (the node-operator case),
+     *     every tenant is listed, unchanged.
+     *
+     *     Results are ordered created_at descending, then id descending.
+     *     Paging is keyset-based: next_cursor stays correct even when the
+     *     backup it was derived from is deleted before the next page is
+     *     fetched (no duplicates, no skipped rows).
+     */
+    get: operations["listAllBackups"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/admin/backups/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Scheduled backup status
+     * @description Returns the state of the scheduled backup loop on this node. Admin only.
+     *     The route exists only when the server runs with --backup-dir.
+     *     enabled is false when no --backup-cron schedule is configured.
+     */
+    get: operations["getBackupStatus"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/cluster/nodes": {
     parameters: {
       query?: never;
@@ -1105,10 +1231,11 @@ export interface paths {
     put?: never;
     /**
      * Restore a backup into an index
-     * @description Restores the named backup into the destination index given by
-     *     `dest_index` in the body; the destination tenant is the path
-     *     tenant. `backupID` is percent-encoded by the client because a
-     *     backup id contains slashes.
+     * @description Creates a new index from the backup. The index is searchable when
+     *     the call returns. `dest_index` in the body names the destination
+     *     index; the destination tenant is the path tenant. `backupID` is
+     *     percent-encoded by the client because a backup id contains
+     *     slashes.
      */
     post: operations["restoreBackup"];
     delete?: never;
@@ -1252,6 +1379,7 @@ export interface components {
         | "index_building"
         | "service_unavailable"
         | "payload_too_large"
+        | "insufficient_storage"
         | "not_implemented";
       /** @description Human-readable error message. */
       message: string;
@@ -1279,6 +1407,15 @@ export interface components {
       name?: string;
       /** Format: date-time */
       created_at?: string;
+    };
+    TenantQuotaResponse: {
+      /** @description Storage quota in GB. 0 means no quota. */
+      max_storage_gb?: number;
+      /** @description Current on-disk usage in GB, refreshed periodically. */
+      used_storage_gb?: number;
+    };
+    UpdateTenantQuotaRequest: {
+      max_storage_gb: number;
     };
     TenantDetailResponse: {
       id?: string;
@@ -1362,6 +1499,38 @@ export interface components {
        *     false. See `docs/COMPRESSION.md` § "Approximate-only mode".
        */
       approximate?: boolean;
+      /**
+       * @description Optional per-index override of the server-wide chunker default
+       *     (512 bytes). Bounded to [64, 8192]; must be supplied together
+       *     with `chunk_overlap` (both omitted/zero means "use the server
+       *     default"). Applied the next time this index's LiveIndex is
+       *     opened; does not retroactively rechunk data ingested before the
+       *     override was set, and survives restarts and compaction.
+       *
+       *     The EFFECTIVE chunk size actually used may be smaller than this
+       *     value: it is also capped by the configured embedding model's
+       *     token limit (e.g. local_onnx's bundled models cap it around 512
+       *     bytes), so no chunk is ever built that the model would silently
+       *     truncate. This bound is independent of the [64, 8192] range
+       *     checked here — it depends on which embedding model the index
+       *     uses — so a chunk_size accepted by this validation can still be
+       *     clamped down at chunking time.
+       */
+      chunk_size?: number;
+      /**
+       * @description Optional per-index override of the server-wide chunker overlap
+       *     default (50 bytes). Must be `>= 0` and strictly less than
+       *     `chunk_size`.
+       *
+       *     Validated here only against `chunk_size`, not against the
+       *     embedding model's token-limited EFFECTIVE chunk size (see
+       *     `chunk_size` above). The chunker separately caps the overlap it
+       *     actually uses to at most a quarter of the effective chunk size,
+       *     so an overlap that looks valid against a large `chunk_size` can
+       *     still be reduced once the model's token budget shrinks the
+       *     effective size.
+       */
+      chunk_overlap?: number;
     };
     UpdateIndexRequest: {
       /** @description New index name. */
@@ -1470,6 +1639,23 @@ export interface components {
        */
       vectors_external?: boolean;
       /**
+       * @description Per-index chunker override, if set via
+       *     `CreateIndexRequest.chunk_size`. Absent/zero means the server
+       *     default (512 bytes) is used. This is the REQUESTED size; the
+       *     effective size used at chunking time is also capped by the
+       *     index's embedding model's token limit (see
+       *     `CreateIndexRequest.chunk_size`) and may be smaller.
+       */
+      chunk_size?: number;
+      /**
+       * @description Per-index chunker overlap override, if set via
+       *     `CreateIndexRequest.chunk_overlap`. Absent/zero means the
+       *     server default (50 bytes) is used. See
+       *     `CreateIndexRequest.chunk_overlap` for how this interacts with
+       *     the embedding model's token-capped effective chunk size.
+       */
+      chunk_overlap?: number;
+      /**
        * @description Per-index embedding backend override, if configured. Empty
        *     for the default (process-wide embedder). See
        *     `UpdateIndexRequest.embedding_backend`.
@@ -1496,7 +1682,10 @@ export interface components {
       status?: "pending" | "building" | "ready" | "error" | "deleted";
       error?: string;
       /**
-       * @description Embedding-space classification of this index.
+       * @description Embedding-space classification of this index. empty means the
+       *     index holds no vectors (0 chunks), so there is nothing to
+       *     compare -- not a risk signal. It takes precedence over every
+       *     other state.
        * @enum {string}
        */
       embed_space_state?:
@@ -1505,7 +1694,8 @@ export interface components {
         | "mismatch"
         | "external_unverified"
         | "external_agree"
-        | "external_diverged";
+        | "external_diverged"
+        | "empty";
       /** @description The index's own stored embedding fingerprint. */
       embed_fingerprint?: string;
       /** @description Fingerprint of the embedder this server is currently serving with. */
@@ -1653,6 +1843,18 @@ export interface components {
        *     supplied every ID.
        */
       external_ids?: string[];
+      /**
+       * @description Advisory only -- the request still succeeds and every document is
+       *     still ingested. Currently populated only on the precomputed-vector
+       *     path (every document carries `vector`) for a document whose text
+       *     exceeds the embedder's estimated token budget. The client already
+       *     computed the vector for that exact text, so the document is never
+       *     rejected -- but any FUTURE re-embed of the stored text (a
+       *     text-ingested index's rerank re-embed, or a model switch/reembed)
+       *     will silently truncate it at the model's token limit. Chunk
+       *     documents before embedding them to avoid this.
+       */
+      warnings?: string[];
     };
     /**
      * @description One chunk of a retrieved document. NOT ChunkResponse: this carries
@@ -1842,6 +2044,29 @@ export interface components {
        * @default false
        */
       hybrid: boolean;
+      /**
+       * @description Collapses results so no more than `max_per_doc` chunks from
+       *     the same source document appear in the response -- a
+       *     document chunked into many pieces can otherwise flood top-k
+       *     with near-duplicate chunks and crowd out other relevant
+       *     documents. Grouped by each result's own `id` (the document's
+       *     client-provided external ID, shared by every chunk of one
+       *     document on every ingest path), not by the internal
+       *     `document_id` in `metadata`. Only `"document"` is supported.
+       *     Unset (the default) is dense-only, byte-identical to the
+       *     pre-`group_by` behavior. Requires `max_per_doc` to also be
+       *     set. Not currently supported on a sharded index -- returns
+       *     400.
+       * @enum {string}
+       */
+      group_by?: "document";
+      /**
+       * @description Maximum chunks from the same document allowed in the
+       *     results. Required (>= 1) when `group_by` is set; an error if
+       *     `group_by` is set and this is unset or less than 1. Ignored
+       *     (no effect, no validation) when `group_by` is unset.
+       */
+      max_per_doc?: number;
     };
     SearchResult: {
       /**
@@ -1874,10 +2099,24 @@ export interface components {
       rerank_score?: number;
       /** @description Chunk metadata merged with arbitrary user metadata. */
       metadata?: {
-        /** @description Internal document ID. */
+        /**
+         * @description Internal per-batch document counter. NOT a stable or
+         *     globally unique document identity -- it is 0 for every
+         *     chunk ingested through the precomputed-vector path, and
+         *     can repeat across compactions. `group_by` does not use
+         *     it; use the result's own `id` to identify a document.
+         */
         document_id?: number;
         /** @description Chunk index within the document. */
         chunk_index?: number;
+        /**
+         * @description How many candidates for this result's document (grouped
+         *     by `id`) appeared in the over-fetched pool the server
+         *     examined before applying `max_per_doc` -- not the
+         *     document's true total chunk count in the index. Present
+         *     only when the request set `group_by`.
+         */
+        chunk_count?: number;
         /** @description Repository ID for RBAC filtering. */
         repo_id?: string;
         /** @description File path within the repository. */
@@ -2255,6 +2494,85 @@ export interface components {
       /** @description Echoes whether the sweep was a dry run. */
       dry_run: boolean;
     };
+    /** @description One backup row in GET /v1/admin/backups. */
+    AdminBackupRow: {
+      /** @description Opaque backup id, also the storage key prefix. */
+      id: string;
+      tenant_id: string;
+      /** @description Empty when the owning tenant no longer exists. */
+      tenant_name: string;
+      index_id: string;
+      /** @description Empty when the owning index no longer exists. */
+      index_name: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: int64 */
+      total_size: number;
+      num_chunks: number;
+    };
+    /** @description Body of `GET /v1/admin/backups`. */
+    AdminBackupList: {
+      backups: components["schemas"]["AdminBackupRow"][];
+      /** @description Opaque cursor for the next page. Empty on the last page. */
+      next_cursor: string;
+      /** @description Count of backups matching the filters, before paging. */
+      total: number;
+    };
+    /**
+     * @description Body of `GET /v1/admin/backups/status`. Mirrors
+     *     internal/backup.ScheduleStatus. `enabled`, `keep`, `runs_ok` and
+     *     `runs_failed` are always present in the response -- none of the
+     *     four carries `omitempty` on the Go struct, so they come back
+     *     zero-valued (`enabled: false`, `keep: 0`, `runs_ok: 0`,
+     *     `runs_failed: 0`) rather than omitted when no --backup-cron
+     *     schedule is configured. Every other field (`schedule`,
+     *     `interval_seconds`, `next_run`, `last_run`, `last_success`,
+     *     `last_run_ok`) is `omitempty` on the Go side and is absent until
+     *     the scheduler has actually populated it.
+     */
+    BackupScheduleStatus: {
+      /** @description True once a scheduler is running (--backup-dir and --backup-cron both set). */
+      enabled: boolean;
+      /**
+       * @description The cron spec the scheduler was started with.
+       * @example 0 2 * * *
+       */
+      schedule?: string;
+      /** @description Number of backups retained per index after each run. */
+      keep: number;
+      /**
+       * Format: int64
+       * @description Cadence derived from the cron spec, in seconds.
+       */
+      interval_seconds?: number;
+      /**
+       * Format: date-time
+       * @description Timestamp of the next scheduled run.
+       */
+      next_run?: string;
+      /**
+       * Format: date-time
+       * @description Timestamp of the most recent run, successful or not.
+       */
+      last_run?: string;
+      /**
+       * Format: date-time
+       * @description Timestamp of the most recent successful run.
+       */
+      last_success?: string;
+      /** @description Whether the most recent run succeeded. */
+      last_run_ok?: boolean;
+      /**
+       * Format: int64
+       * @description Total successful runs since the process started.
+       */
+      runs_ok: number;
+      /**
+       * Format: int64
+       * @description Total failed runs since the process started.
+       */
+      runs_failed: number;
+    };
     ClusterNodeView: {
       id?: string;
       addr?: string;
@@ -2290,10 +2608,22 @@ export interface components {
       under_replicated_shards?: number;
     };
     CreateAPIKeyRequest: {
-      /** @description Owning user ID. Must already exist inside the tenant. */
+      /**
+       * @description Owning user ID (`u_` prefix). Without `role`, it must name an
+       *     existing user inside the tenant. With `role`, it may name a new
+       *     principal: the key record stores the role.
+       */
       user_id: string;
       /** @description Human-readable label stored alongside the key. */
       name: string;
+      /**
+       * @description Role the key carries. Required when `user_id` does not name an
+       *     existing user. When it names one, the role must equal that
+       *     user's role. Mint an `admin` key first: once a tenant has a key,
+       *     only an admin key of that tenant can create or revoke keys.
+       * @enum {string}
+       */
+      role?: "admin" | "editor" | "viewer";
     };
     CreateAPIKeyResponse: {
       /** @description Stable key identifier (e.g. `k_abc123`). */
@@ -2453,17 +2783,29 @@ export interface components {
       tenant_id?: string;
       /** @description Whether this index is currently resident in memory (vs. classified by peeking its on-disk header). */
       loaded?: boolean;
-      /** @enum {string} */
+      /**
+       * @description empty means the index holds no vectors (num_chunks == 0), so
+       *     there is nothing to compare -- not a risk signal. It takes
+       *     precedence over every other state, including a stamped mismatch
+       *     or an external state.
+       * @enum {string}
+       */
       state?:
         | "unknown"
         | "verified"
         | "mismatch"
         | "external_unverified"
         | "external_agree"
-        | "external_diverged";
+        | "external_diverged"
+        | "empty";
       /** @description The index's own stored embedding fingerprint. */
       embed_fingerprint?: string;
       detail?: string;
+      /**
+       * @description This index's chunk count. 0 is exactly the condition that
+       *     resolves state to "empty".
+       */
+      num_chunks?: number;
       /**
        * Format: date-time
        * @description When this row's state was last resolved. Absent if never checked.
@@ -2484,7 +2826,7 @@ export interface components {
        */
       policy?: "warn" | "refuse_search" | "refuse_open";
       /**
-       * @description Count of indexes per state. Always has all six
+       * @description Count of indexes per state. Always has all seven
        *     EmbedSpaceState keys present, even at zero, so callers can
        *     distinguish "no indexes in this state" from "this state
        *     doesn't exist". sum(counts.values()) == len(indexes).
@@ -2493,6 +2835,32 @@ export interface components {
         [key: string]: number;
       };
       indexes?: components["schemas"]["EmbedSpaceIndexRow"][];
+    };
+    APIKeyStatusTenantRow: {
+      tenant_id?: string;
+      tenant_name?: string;
+      /** @description Number of active (non-revoked) API keys this tenant holds. */
+      active_keys?: number;
+      /**
+       * @description Whether the tenant may be addressed only with one of its own
+       *     keys (the per-tenant key rule): active_keys > 0 AND the rule's
+       *     kill switch (GRAPHANN_TENANT_KEY_ENFORCEMENT=off) is not set.
+       */
+      locked?: boolean;
+    };
+    APIKeyStatusResponse: {
+      /**
+       * @description Scoped to the caller: every tenant for a node admin, only the
+       *     caller's own tenant for a tenant-authenticated caller, or
+       *     every tenant except keyed ones for an anonymous caller.
+       */
+      tenants?: components["schemas"]["APIKeyStatusTenantRow"][];
+      strict_auth?: boolean;
+      /** @description Whether the node admin token (--admin-token) is set. Never the token itself. */
+      admin_token_configured?: boolean;
+      metrics_public?: boolean;
+      /** @description False only when GRAPHANN_TENANT_KEY_ENFORCEMENT=off. */
+      tenant_key_enforcement?: boolean;
     };
     BackupChunkInfo: {
       /** @description Storage key for this chunk. */
@@ -2550,8 +2918,10 @@ export interface components {
       backups?: components["schemas"]["BackupSummary"][];
     };
     RestoreBackupRequest: {
-      /** @description Destination index within the path tenant. The destination directory must be empty -- restore refuses to overwrite existing data. */
+      /** @description Must be a new, unused index id -- restore creates it and refuses to overwrite an existing index (index ids are global across tenants). */
       dest_index: string;
+      /** @description Display name for the restored index. Defaults to "<source name> (restored)" when omitted. */
+      name?: string;
     };
     RestoreBackupResponse: {
       /** @enum {string} */
@@ -2615,7 +2985,13 @@ export interface components {
         "application/json": components["schemas"]["ErrorEnvelope"];
       };
     };
-    /** @description Authentication required. */
+    /**
+     * @description Authentication required. Returned when a presented API key is not
+     *     valid, and when the addressed tenant has at least one API key but
+     *     the request carries none (per-tenant key rule; see
+     *     docs/SECURITY.md). Strict auth returns it for every request
+     *     without a valid tenant header and key.
+     */
     Unauthorized: {
       headers: {
         [name: string]: unknown;
@@ -2986,6 +3362,70 @@ export interface operations {
       500: components["responses"]["InternalError"];
     };
   };
+  getTenantQuota: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /**
+         * @description Unique tenant identifier.
+         * @example t_acme
+         */
+        tenantID: components["parameters"]["tenantID"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Quota and usage. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TenantQuotaResponse"];
+        };
+      };
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
+      500: components["responses"]["InternalError"];
+    };
+  };
+  updateTenantQuota: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /**
+         * @description Unique tenant identifier.
+         * @example t_acme
+         */
+        tenantID: components["parameters"]["tenantID"];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateTenantQuotaRequest"];
+      };
+    };
+    responses: {
+      /** @description Quota updated. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TenantQuotaResponse"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
+      500: components["responses"]["InternalError"];
+    };
+  };
   getTenant: {
     parameters: {
       query?: never;
@@ -3011,6 +3451,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3047,6 +3488,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3076,6 +3518,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3109,6 +3552,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3143,6 +3587,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
     };
@@ -3175,6 +3620,7 @@ export interface operations {
         content?: never;
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -3214,6 +3660,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3255,6 +3702,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -3308,6 +3756,7 @@ export interface operations {
           "application/json": components["schemas"]["ListDocumentsResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3377,6 +3826,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       429: components["responses"]["QuotaExceeded"];
       500: components["responses"]["InternalError"];
@@ -3437,6 +3887,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3494,6 +3945,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3566,6 +4018,7 @@ export interface operations {
           "application/json": components["schemas"]["GetDocumentResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -3611,6 +4064,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3660,6 +4114,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -3716,6 +4171,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3760,6 +4216,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       429: components["responses"]["QuotaExceeded"];
       503: components["responses"]["IndexNotReady"];
@@ -3814,6 +4271,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       503: components["responses"]["IndexNotReady"];
     };
@@ -3854,6 +4312,7 @@ export interface operations {
           "application/json": components["schemas"]["CompactResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       /**
        * @description Compaction is already in progress for this index. Either the
@@ -3924,7 +4383,9 @@ export interface operations {
           "application/json": components["schemas"]["CompactAllResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
       /** @description The server has no compaction scheduler wired; bulk compaction is unavailable. */
       409: {
         headers: {
@@ -3981,6 +4442,7 @@ export interface operations {
           "application/json": components["schemas"]["ClearResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4014,6 +4476,7 @@ export interface operations {
           "application/json": components["schemas"]["LiveStatsResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -4051,6 +4514,7 @@ export interface operations {
           "application/json": components["schemas"]["FlushIndexResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -4092,6 +4556,7 @@ export interface operations {
           "application/json": components["schemas"]["RebuildGraphResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       /** @description A compaction is in progress on this index; retry after it completes. */
@@ -4175,6 +4640,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4214,6 +4680,7 @@ export interface operations {
           "application/json": components["schemas"]["PendingStatusResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4254,6 +4721,7 @@ export interface operations {
           "application/json": components["schemas"]["ClearPendingResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4308,6 +4776,7 @@ export interface operations {
           "application/json": components["schemas"]["ProcessPendingResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4368,6 +4837,8 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -4416,6 +4887,8 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -4449,6 +4922,8 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -4477,6 +4952,8 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -4528,6 +5005,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       /** @description A reembed job is already in flight for this index. */
@@ -4617,6 +5095,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -4651,6 +5130,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -4692,6 +5172,7 @@ export interface operations {
           "application/json": components["schemas"]["GCResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4794,7 +5275,8 @@ export interface operations {
            *         "mismatch": 0,
            *         "external_unverified": 2,
            *         "external_agree": 1,
-           *         "external_diverged": 0
+           *         "external_diverged": 0,
+           *         "empty": 3
            *       },
            *       "indexes": [
            *         {
@@ -4804,12 +5286,109 @@ export interface operations {
            *           "state": "verified",
            *           "embed_fingerprint": "fp_a1b2c3",
            *           "detail": "",
+           *           "num_chunks": 15000,
            *           "checked_at": "2026-08-10T12:00:00Z"
            *         }
            *       ]
            *     }
            */
           "application/json": components["schemas"]["EmbedSpaceAdminResponse"];
+        };
+      };
+      403: components["responses"]["Forbidden"];
+    };
+  };
+  getAPIKeyStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Per-tenant key status plus the node's security posture. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          /**
+           * @example {
+           *       "tenants": [
+           *         {
+           *           "tenant_id": "t_acme",
+           *           "tenant_name": "Acme",
+           *           "active_keys": 3,
+           *           "locked": true
+           *         }
+           *       ],
+           *       "strict_auth": true,
+           *       "admin_token_configured": true,
+           *       "metrics_public": false,
+           *       "tenant_key_enforcement": true
+           *     }
+           */
+          "application/json": components["schemas"]["APIKeyStatusResponse"];
+        };
+      };
+      403: components["responses"]["Forbidden"];
+      500: components["responses"]["InternalError"];
+    };
+  };
+  listAllBackups: {
+    parameters: {
+      query?: {
+        /**
+         * @description Restrict results to one tenant. Omit to list every tenant. For
+         *     an authenticated tenant caller this is effectively forced to
+         *     that tenant's own id; naming a different tenant returns an
+         *     empty list rather than an error.
+         */
+        tenant_id?: string;
+        /** @description Restrict results to one index (applied after tenant_id). */
+        index_id?: string;
+        /** @description Maximum rows to return. */
+        limit?: number;
+        /** @description Opaque keyset cursor from a previous response's next_cursor. */
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Backups across all tenants */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminBackupList"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      403: components["responses"]["Forbidden"];
+      500: components["responses"]["InternalError"];
+    };
+  };
+  getBackupStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Backup schedule status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BackupScheduleStatus"];
         };
       };
       403: components["responses"]["Forbidden"];
@@ -4985,6 +5564,8 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
       501: components["responses"]["BackupDisabled"];
@@ -5029,6 +5610,9 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
       501: components["responses"]["BackupDisabled"];
     };
@@ -5079,8 +5663,69 @@ export interface operations {
           "application/json": components["schemas"]["RestoreBackupResponse"];
         };
       };
-      400: components["responses"]["BadRequest"];
+      /**
+       * @description The request body is malformed, `dest_index` is missing, or
+       *     `dest_index` is not a valid new index id: it must start
+       *     with the `i_` prefix, the same format enforced when
+       *     creating an index directly.
+       */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          /**
+           * @example {
+           *       "error": {
+           *         "code": "bad_request",
+           *         "message": "Invalid index ID format"
+           *       }
+           *     }
+           */
+          "application/json": components["schemas"]["ErrorEnvelope"];
+        };
+      };
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      /** @description An index with the requested `dest_index` id already exists (index ids are global across tenants). */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          /**
+           * @example {
+           *       "error": {
+           *         "code": "conflict"
+           *       }
+           *     }
+           */
+          "application/json": components["schemas"]["ErrorEnvelope"];
+        };
+      };
+      /**
+       * @description The backup predates stored index settings (made before a
+       *     manifest carried `meta.index`) and its source index no
+       *     longer exists, so restore has no settings to recreate the
+       *     index with. Recreate the source index with the same
+       *     settings, then restore.
+       */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          /**
+           * @example {
+           *       "error": {
+           *         "code": "unprocessable_entity"
+           *       }
+           *     }
+           */
+          "application/json": components["schemas"]["ErrorEnvelope"];
+        };
+      };
       500: components["responses"]["InternalError"];
       501: components["responses"]["BackupDisabled"];
     };
@@ -5122,6 +5767,8 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
       501: components["responses"]["BackupDisabled"];
@@ -5151,6 +5798,7 @@ export interface operations {
           "application/json": components["schemas"]["ListAPIKeysResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -5191,6 +5839,7 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -5223,6 +5872,7 @@ export interface operations {
         };
         content?: never;
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
@@ -5253,6 +5903,8 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5281,7 +5933,9 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5320,7 +5974,9 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };

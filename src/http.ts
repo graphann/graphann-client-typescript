@@ -9,19 +9,9 @@
  * No business logic lives here — it's a transport concern.
  */
 
-import {
-  errorFromResponse,
-  GraphANNError,
-  NetworkError,
-  RateLimitError,
-} from "./errors.js";
+import { errorFromResponse, GraphANNError, NetworkError, RateLimitError } from "./errors.js";
 import type { ResolvedClientOptions } from "./options.js";
-import {
-  computeBackoff,
-  isRetryableStatus,
-  parseRetryAfter,
-  sleep,
-} from "./retry.js";
+import { computeBackoff, isRetryableStatus, parseRetryAfter, sleep } from "./retry.js";
 
 /** A single HTTP request as understood by `request()`. */
 export interface HTTPRequest {
@@ -46,10 +36,7 @@ const METRIC_REQUEST_RETRY = "request.retry";
  * (or `undefined` on `204 No Content`). Throws an SDK-specific subclass of
  * `GraphANNError` on non-2xx responses or transport failures.
  */
-export async function request<T>(
-  opts: ResolvedClientOptions,
-  req: HTTPRequest,
-): Promise<T> {
+export async function request<T>(opts: ResolvedClientOptions, req: HTTPRequest): Promise<T> {
   const url = buildUrl(opts.baseUrl, req.path, req.query);
   const startedAt = Date.now();
   const labels = { method: req.method, path: req.path };
@@ -80,9 +67,7 @@ export async function request<T>(
       // Decide whether to retry.
       const isRateLimit = err instanceof RateLimitError;
       const status =
-        err instanceof RateLimitError
-          ? 429
-          : (err as { status?: number }).status ?? 0;
+        err instanceof RateLimitError ? 429 : ((err as { status?: number }).status ?? 0);
       const isNetwork = err instanceof NetworkError;
       const retryable = isRateLimit || isNetwork || isRetryableStatus(status);
       if (!retryable || attempt >= opts.maxRetries) {
@@ -151,11 +136,7 @@ async function doFetch<T>(
   if (req.body !== undefined && req.body !== null) {
     const json = JSON.stringify(req.body);
     headers["content-type"] = "application/json";
-    if (
-      opts.gzipThreshold > 0 &&
-      json.length >= opts.gzipThreshold &&
-      hasCompressionStream()
-    ) {
+    if (opts.gzipThreshold > 0 && json.length >= opts.gzipThreshold && hasCompressionStream()) {
       try {
         const compressed = await gzipString(json);
         // Wrap in a Blob (own its own ArrayBuffer copy) so the body satisfies
@@ -268,7 +249,8 @@ function hasCompressionStream(): boolean {
 }
 
 async function gzipString(payload: string): Promise<Uint8Array> {
-  const Compression = (globalThis as unknown as { CompressionStream: typeof CompressionStream }).CompressionStream;
+  const Compression = (globalThis as unknown as { CompressionStream: typeof CompressionStream })
+    .CompressionStream;
   const stream = new Compression("gzip");
   const writer = stream.writable.getWriter();
   const encoded = new TextEncoder().encode(payload);

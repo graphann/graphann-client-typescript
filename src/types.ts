@@ -37,6 +37,9 @@ export type HealthResponse = components["schemas"]["HealthResponse"] & {
   reason?: string;
 };
 
+/** `GET /ready` body: `status` is `"ready"`, or a 503 carries `reason` while warming up. */
+export type ReadyResponse = components["schemas"]["ReadyResponse"];
+
 // ---------------------------------------------------------------------------
 // Tenant
 // ---------------------------------------------------------------------------
@@ -51,6 +54,10 @@ export type CreateTenantRequest = components["schemas"]["CreateTenantRequest"];
 export type ListTenantsResponse = components["schemas"]["ListTenantsResponse"];
 
 export type DeleteTenantResponse = components["schemas"]["DeleteTenantResponse"];
+
+export type TenantQuotaResponse = components["schemas"]["TenantQuotaResponse"];
+
+export type UpdateTenantQuotaRequest = components["schemas"]["UpdateTenantQuotaRequest"];
 
 // ---------------------------------------------------------------------------
 // Index
@@ -266,17 +273,13 @@ export type LLMProvider = "openai" | "ollama" | "anthropic";
 
 export type LLMSettings = components["schemas"]["LLMSettings"];
 
-export interface UpdateLLMSettingsResponse {
-  message: string;
-  org_id: string;
-  settings: LLMSettings;
-}
+export type LLMSettingsPatch = components["schemas"]["LLMSettingsPatch"];
 
-export interface DeleteLLMSettingsResponse {
-  message: string;
-  org_id: string;
-  settings?: LLMSettings;
-}
+/** The server answers PATCH with the merged settings (`api_key` masked), not an envelope. */
+export type UpdateLLMSettingsResponse = LLMSettings;
+
+/** The server answers DELETE with the reset defaults. */
+export type DeleteLLMSettingsResponse = LLMSettings;
 
 // ---------------------------------------------------------------------------
 // API keys
@@ -312,6 +315,8 @@ export type OrgSyncDocumentsResponse = components["schemas"]["SyncDocumentsRespo
 
 export type OrgIndexListResponse = components["schemas"]["OrgIndexListResponse"];
 
+export type SharedIndexListResponse = components["schemas"]["SharedIndexListResponse"];
+
 // ---------------------------------------------------------------------------
 // Resources (atomic upsert)
 // ---------------------------------------------------------------------------
@@ -335,6 +340,14 @@ export type LicenseAuditEvent = components["schemas"]["LicenseAuditEvent"];
 export type EmbedSpaceIndexRow = components["schemas"]["EmbedSpaceIndexRow"];
 
 export type EmbedSpaceAdminResponse = components["schemas"]["EmbedSpaceAdminResponse"];
+
+// ---------------------------------------------------------------------------
+// Admin: API-key status
+// ---------------------------------------------------------------------------
+
+export type APIKeyStatusTenantRow = components["schemas"]["APIKeyStatusTenantRow"];
+
+export type APIKeyStatusResponse = components["schemas"]["APIKeyStatusResponse"];
 
 // ---------------------------------------------------------------------------
 // Index maintenance: compact-all
@@ -364,6 +377,22 @@ export type CreateBackupResponse = components["schemas"]["CreateBackupResponse"]
 export type BackupSummary = components["schemas"]["BackupSummary"];
 
 export type ListBackupsResponse = components["schemas"]["ListBackupsResponse"];
+
+export type AdminBackupRow = components["schemas"]["AdminBackupRow"];
+
+export type AdminBackupList = components["schemas"]["AdminBackupList"];
+
+export type BackupScheduleStatus = components["schemas"]["BackupScheduleStatus"];
+
+/** Filters and paging for `client.listAllBackups`. */
+export interface ListAllBackupsOptions {
+  tenantId?: TenantID;
+  indexId?: IndexID;
+  /** Server default 200, max 1000. */
+  limit?: number;
+  /** `next_cursor` from the previous page. */
+  cursor?: string;
+}
 
 export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
 

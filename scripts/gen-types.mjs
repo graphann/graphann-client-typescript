@@ -24,7 +24,9 @@ const ROOT = join(__dirname, "..");
 const LOCAL_SPEC_PATH = join(ROOT, "api", "openapi", "spec.yaml");
 const SPEC_PATH =
   process.env.GRAPHANN_SPEC ??
-  (existsSync(LOCAL_SPEC_PATH) ? LOCAL_SPEC_PATH : join(ROOT, "..", "api", "openapi", "spec.yaml"));
+  (existsSync(LOCAL_SPEC_PATH)
+    ? LOCAL_SPEC_PATH
+    : join(ROOT, "..", "api", "openapi", "spec.yaml"));
 const OUT_PATH = join(ROOT, "src/generated/types.ts");
 const GENERATOR_PKG = "openapi-typescript@7";
 
@@ -55,13 +57,7 @@ function generate(destPath) {
   writeFileSync(destPath, HEADER + body);
   execFileSync(
     process.execPath,
-    [
-      join(ROOT, "node_modules/prettier/bin/prettier.cjs"),
-      "--write",
-      "--config",
-      join(ROOT, ".prettierrc.json"),
-      destPath,
-    ],
+    [join(ROOT, "node_modules/prettier/bin/prettier.cjs"), "--write", "--config", join(ROOT, ".prettierrc.json"), destPath],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
 }

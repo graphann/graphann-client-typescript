@@ -88,7 +88,7 @@ export interface ResolvedClientOptions {
 }
 
 /** SDK version. Update on every release. */
-export const SDK_VERSION = "0.9.1";
+export const SDK_VERSION = "0.10.0";
 
 /** Best-effort runtime/platform detection for the User-Agent string. */
 function detectRuntime(): { runtime: string; platform: string } {

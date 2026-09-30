@@ -4,6 +4,40 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.10.0 - 2026-09-30
+
+### Added
+
+- `getTenantQuota` and `updateTenantQuota` (`GET`/`PUT /v1/tenants/{id}/quota`).
+- `getAPIKeyStatus` (`GET /v1/admin/api-key-status`).
+- `listAllBackups` (`GET /v1/admin/backups`, filters `tenantId`, `indexId`,
+  `limit`, keyset `cursor`) and `getBackupStatus`
+  (`GET /v1/admin/backups/status`).
+- Types `TenantQuotaResponse`, `UpdateTenantQuotaRequest`, `AdminBackupRow`,
+  `AdminBackupList`, `BackupScheduleStatus`, `APIKeyStatusTenantRow`,
+  `APIKeyStatusResponse`, `ListAllBackupsOptions`, `ReadyResponse`,
+  `SharedIndexListResponse`, `LLMSettingsPatch`.
+- `restoreBackup` also accepts a `RestoreBackupRequest`, which carries the
+  optional restored-index `name`.
+- `search` and `batchSearch` accept `group_by` and `max_per_doc`; `createAPIKey`
+  accepts `role`; `createIndex` accepts `chunk_size` and `chunk_overlap`.
+- Regenerated types add `AddDocumentsResponse.warnings`,
+  `EmbedSpaceIndexRow.num_chunks`, `IndexInfo.chunk_size`/`chunk_overlap`, the
+  `empty` `embed_space_state`, seven `EmbedSpaceAdminResponse.counts` keys and
+  the `insufficient_storage` error code.
+
+### Fixed
+
+- `search` dropped `group_by` and `max_per_doc`, and `createAPIKey` dropped
+  `role`, before they reached the wire.
+- `updateLLMSettings` and `deleteLLMSettings` return `LLMSettings`, which is
+  what the server sends, instead of a `{ message, org_id, settings }` envelope
+  the server never returned. `UpdateLLMSettingsResponse` and
+  `DeleteLLMSettingsResponse` are now aliases of `LLMSettings`.
+- `ready` returns `ReadyResponse` (`status` is `"ready"`), and
+  `listSharedIndexes` returns `SharedIndexListResponse`.
+- Source and tests are reformatted to pass `prettier --check`.
+
 ## v0.9.1 - 2026-09-07
 
 ### Fixed

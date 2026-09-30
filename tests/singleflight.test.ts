@@ -8,11 +8,7 @@ describe("SingleFlight", () => {
     const fn = (): Promise<number> =>
       new Promise((resolve) => setTimeout(() => resolve(++calls), 10));
 
-    const [a, b, c] = await Promise.all([
-      sf.do("k", fn),
-      sf.do("k", fn),
-      sf.do("k", fn),
-    ]);
+    const [a, b, c] = await Promise.all([sf.do("k", fn), sf.do("k", fn), sf.do("k", fn)]);
     expect(calls).toBe(1);
     expect(a).toBe(1);
     expect(b).toBe(1);
@@ -22,22 +18,19 @@ describe("SingleFlight", () => {
   it("does NOT collapse calls with different keys", async () => {
     const sf = new SingleFlight<string>();
     let counter = 0;
-    const fn = (label: string): (() => Promise<string>) => () =>
-      new Promise((r) => setTimeout(() => r(`${label}-${++counter}`), 5));
+    const fn =
+      (label: string): (() => Promise<string>) =>
+      () =>
+        new Promise((r) => setTimeout(() => r(`${label}-${++counter}`), 5));
 
-    const [a, b] = await Promise.all([
-      sf.do("a", fn("A")),
-      sf.do("b", fn("B")),
-    ]);
+    const [a, b] = await Promise.all([sf.do("a", fn("A")), sf.do("b", fn("B"))]);
     expect(a).toBe("A-1");
     expect(b).toBe("B-2");
   });
 
   it("clears the entry after rejection", async () => {
     const sf = new SingleFlight<number>();
-    await expect(
-      sf.do("k", () => Promise.reject(new Error("boom"))),
-    ).rejects.toThrow("boom");
+    await expect(sf.do("k", () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
     expect(sf.has("k")).toBe(false);
     // A subsequent call with the same key starts fresh.
     const v = await sf.do("k", () => Promise.resolve(42));

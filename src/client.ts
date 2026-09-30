@@ -15,7 +15,10 @@ import { SingleFlight, stableHash } from "./singleflight.js";
 import type {
   AddDocumentsRequest,
   AddDocumentsResponse,
+  AdminBackupList,
   APIKey,
+  APIKeyStatusResponse,
+  BackupScheduleStatus,
   BatchSearchRequest,
   BatchSearchResponse,
   BulkDeleteByExternalIdsResponse,
@@ -51,6 +54,7 @@ import type {
   Job,
   LicenseAuditEvent,
   LicenseStatus,
+  ListAllBackupsOptions,
   ListAPIKeysResponse,
   ListBackupsResponse,
   ListDocumentEntry,
@@ -62,6 +66,7 @@ import type {
   ListTenantsResponse,
   LiveIndexStats,
   LLMSettings,
+  LLMSettingsPatch,
   MultiSearchRequest,
   MultiSearchResponse,
   OrgIndexListResponse,
@@ -70,14 +75,19 @@ import type {
   Page,
   PendingStatusResponse,
   ProcessPendingResponse,
+  ReadyResponse,
   RebuildGraphResponse,
   RequestOptions,
+  RestoreBackupRequest,
   RestoreBackupResponse,
   SearchRequest,
   SearchResponse,
+  SharedIndexListResponse,
   SwitchEmbeddingModelRequest,
   SwitchEmbeddingModelResponse,
   Tenant,
+  TenantQuotaResponse,
+  UpdateTenantQuotaRequest,
   TenantID,
   UpdateIndexRequest,
   UpdateLLMSettingsResponse,
@@ -120,8 +130,8 @@ export class Client {
    * other call. Bodyless 200 responses (some proxies strip JSON) parse to
    * `{}` — the runtime body is whatever the server actually sent.
    */
-  async ready(opts: RequestOptions = {}): Promise<HealthResponse> {
-    return this.send<HealthResponse>(
+  async ready(opts: RequestOptions = {}): Promise<ReadyResponse> {
+    return this.send<ReadyResponse>(
       { method: "GET", path: "/ready", signal: opts.signal },
       { ...opts, idempotent: true },
     );
@@ -156,6 +166,34 @@ export class Client {
   async deleteTenant(tenantId: TenantID, opts: RequestOptions = {}): Promise<DeleteTenantResponse> {
     return this.send<DeleteTenantResponse>(
       { method: "DELETE", path: `/v1/tenants/${encodeURIComponent(tenantId)}` },
+      opts,
+    );
+  }
+
+  /** GET /v1/tenants/{id}/quota — `max_storage_gb` 0 means no quota. */
+  async getTenantQuota(
+    tenantId: TenantID,
+    opts: RequestOptions = {},
+  ): Promise<TenantQuotaResponse> {
+    return this.send<TenantQuotaResponse>(
+      { method: "GET", path: `/v1/tenants/${encodeURIComponent(tenantId)}/quota` },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * PUT /v1/tenants/{id}/quota
+   *
+   * `max_storage_gb` 0 removes the quota. Ingest over the quota answers 507
+   * (`ServerError`). Needs the node admin token when the node requires one.
+   */
+  async updateTenantQuota(
+    tenantId: TenantID,
+    req: UpdateTenantQuotaRequest,
+    opts: RequestOptions = {},
+  ): Promise<TenantQuotaResponse> {
+    return this.send<TenantQuotaResponse>(
+      { method: "PUT", path: `/v1/tenants/${encodeURIComponent(tenantId)}/quota`, body: req },
       opts,
     );
   }
@@ -648,6 +686,8 @@ export class Client {
     if (req.rerank_k !== undefined) body.rerank_k = req.rerank_k;
     if (req.ef_search !== undefined) body.ef_search = req.ef_search;
     if (req.hybrid !== undefined) body.hybrid = req.hybrid;
+    if (req.group_by !== undefined) body.group_by = req.group_by;
+    if (req.max_per_doc !== undefined) body.max_per_doc = req.max_per_doc;
     return this.send<SearchResponse>(
       {
         method: "POST",
@@ -707,8 +747,11 @@ export class Client {
   }
 
   /** GET /v1/orgs/{orgID}/shared/indexes */
-  async listSharedIndexes(orgId: string, opts: RequestOptions = {}): Promise<OrgIndexListResponse> {
-    return this.send<OrgIndexListResponse>(
+  async listSharedIndexes(
+    orgId: string,
+    opts: RequestOptions = {},
+  ): Promise<SharedIndexListResponse> {
+    return this.send<SharedIndexListResponse>(
       {
         method: "GET",
         path: `/v1/orgs/${encodeURIComponent(orgId)}/shared/indexes`,
@@ -838,7 +881,7 @@ export class Client {
   /** PATCH /v1/orgs/{orgID}/llm-settings (partial merge) */
   async updateLLMSettings(
     orgId: string,
-    settings: Partial<LLMSettings>,
+    settings: LLMSettingsPatch,
     opts: RequestOptions = {},
   ): Promise<UpdateLLMSettingsResponse> {
     return this.send<UpdateLLMSettingsResponse>(
@@ -872,7 +915,8 @@ export class Client {
   /** POST /v1/tenants/{tid}/api-keys */
   async createAPIKey(req: CreateAPIKeyRequest, opts: RequestOptions = {}): Promise<APIKey> {
     const tenantId = req.tenantId ?? this.requireTenant(opts);
-    const body = { name: req.name, user_id: req.user_id };
+    const body: Record<string, unknown> = { name: req.name, user_id: req.user_id };
+    if (req.role !== undefined) body.role = req.role;
     return this.send<APIKey>(
       {
         method: "POST",
@@ -1051,6 +1095,20 @@ export class Client {
     );
   }
 
+  /**
+   * GET /v1/admin/api-key-status
+   *
+   * Per-tenant active-key counts plus the node's security posture. Rows are
+   * scoped to the caller (node admin sees all, a tenant key sees its own).
+   * Never returns key material.
+   */
+  async getAPIKeyStatus(opts: RequestOptions = {}): Promise<APIKeyStatusResponse> {
+    return this.send<APIKeyStatusResponse>(
+      { method: "GET", path: "/v1/admin/api-key-status" },
+      { ...opts, idempotent: true },
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Backups
   // -------------------------------------------------------------------------
@@ -1087,21 +1145,25 @@ export class Client {
   /**
    * POST /v1/tenants/{tid}/backups/{backupID}/restore
    *
-   * Restores the named backup into `destIndex` within the path tenant.
-   * `backupId` is percent-encoded here because a backup id contains
-   * slashes (it embeds the tenant, index, and timestamp).
+   * Restores the named backup into a new index within the path tenant.
+   * Pass a bare destination index id, or a `RestoreBackupRequest` to also
+   * set the restored index's display `name` (server default
+   * `"<source name> (restored)"`). `backupId` is percent-encoded here
+   * because a backup id contains slashes (it embeds the tenant, index, and
+   * timestamp).
    */
   async restoreBackup(
     backupId: string,
-    destIndex: IndexID,
+    dest: IndexID | RestoreBackupRequest,
     opts: RequestOptions = {},
   ): Promise<RestoreBackupResponse> {
     const tenantId = this.requireTenant(opts);
+    const body: RestoreBackupRequest = typeof dest === "string" ? { dest_index: dest } : dest;
     return this.send<RestoreBackupResponse>(
       {
         method: "POST",
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/backups/${encodeURIComponent(backupId)}/restore`,
-        body: { dest_index: destIndex },
+        body,
       },
       opts,
     );
@@ -1121,6 +1183,42 @@ export class Client {
         path: `/v1/tenants/${encodeURIComponent(tenantId)}/backups/${encodeURIComponent(backupId)}`,
       },
       opts,
+    );
+  }
+
+  /**
+   * GET /v1/admin/backups
+   *
+   * Cross-tenant backup list with tenant/index display names, newest first.
+   * Keyset-paged: pass the previous `next_cursor` as `cursor`; it is empty on
+   * the last page. Only mounted when the server runs with `--backup-dir`.
+   */
+  async listAllBackups(
+    args: ListAllBackupsOptions = {},
+    opts: RequestOptions = {},
+  ): Promise<AdminBackupList> {
+    const query: Record<string, string | number | undefined> = {};
+    if (args.tenantId !== undefined) query.tenant_id = args.tenantId;
+    if (args.indexId !== undefined) query.index_id = args.indexId;
+    if (args.limit !== undefined) query.limit = args.limit;
+    if (args.cursor !== undefined) query.cursor = args.cursor;
+    return this.send<AdminBackupList>(
+      { method: "GET", path: "/v1/admin/backups", query },
+      { ...opts, idempotent: true },
+    );
+  }
+
+  /**
+   * GET /v1/admin/backups/status
+   *
+   * State of the scheduled backup loop; `enabled` is false when no
+   * `--backup-cron` schedule is configured. Only mounted when the server
+   * runs with `--backup-dir`.
+   */
+  async getBackupStatus(opts: RequestOptions = {}): Promise<BackupScheduleStatus> {
+    return this.send<BackupScheduleStatus>(
+      { method: "GET", path: "/v1/admin/backups/status" },
+      { ...opts, idempotent: true },
     );
   }
 

@@ -19,7 +19,10 @@ export function computeBackoff(attempt: number, initial: number, maxBackoff: num
  *   - delta-seconds (e.g. `"30"`)
  *   - HTTP-date (e.g. `"Wed, 21 Oct 2026 07:28:00 GMT"`)
  */
-export function parseRetryAfter(header: string | null | undefined, now: number = Date.now()): number | null {
+export function parseRetryAfter(
+  header: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
   if (header === null || header === undefined) return null;
   const trimmed = header.trim();
   if (trimmed.length === 0) return null;

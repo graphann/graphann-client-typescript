@@ -16,7 +16,7 @@ vector database.
 Install the built package from the GitHub release:
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.9.1/graphann-client-0.9.1.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.0/graphann-client-0.10.0.tgz
 ```
 
 ## Quickstart
@@ -153,7 +153,7 @@ Status mapping:
 | 409    | `ConflictError`        |
 | 413    | `PayloadTooLargeError` |
 | 429    | `RateLimitError`       |
-| 5xx    | `ServerError`          |
+| 5xx (including 507 `insufficient_storage` on a tenant over its quota) | `ServerError` |
 | transport / abort | `NetworkError` |
 
 ## API surface
@@ -161,7 +161,7 @@ Status mapping:
 | Group     | Methods |
 |-----------|---------|
 | Health    | `health` |
-| Tenants   | `listTenants`, `createTenant`, `getTenant`, `deleteTenant` |
+| Tenants   | `listTenants`, `createTenant`, `getTenant`, `deleteTenant`, `getTenantQuota`, `updateTenantQuota` |
 | Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `compactIndex`, `clearIndex`, `getLiveStats` |
 | Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans` |
 | Search    | `search` (text via `query`, vector via `vector`), `multiSearch` |
@@ -170,6 +170,8 @@ Status mapping:
 | LLM       | `getLLMSettings`, `updateLLMSettings`, `deleteLLMSettings` |
 | API keys  | `createAPIKey`, `listAPIKeys`, `revokeAPIKey` |
 | Org sync  | `syncDocuments` |
+| Backups   | `createBackup`, `listBackups`, `restoreBackup` (optional restored-index `name`), `deleteBackup` |
+| Admin     | `getEmbedSpaceAdmin`, `getAPIKeyStatus`, `listAllBackups` (keyset `next_cursor`), `getBackupStatus` |
 
 ## Performance
 

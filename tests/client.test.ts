@@ -1157,17 +1157,13 @@ describe("LLM settings (org-scoped)", () => {
       http.patch(`${BASE}/v1/orgs/org_a/llm-settings`, async ({ request }) => {
         method = request.method;
         body = await request.json();
-        return HttpResponse.json({
-          message: "updated",
-          org_id: "org_a",
-          settings: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 },
-        });
+        return HttpResponse.json({ provider: "openai", model: "gpt-4o-mini", temperature: 0.2 });
       }),
     );
     const r = await newClient().updateLLMSettings("org_a", { temperature: 0.2 });
     expect(method).toBe("PATCH");
     expect(body).toEqual({ temperature: 0.2 });
-    expect(r.settings.temperature).toBe(0.2);
+    expect(r.temperature).toBe(0.2);
   });
 
   it("deleteLLMSettings DELETEs the new path", async () => {
@@ -1175,12 +1171,12 @@ describe("LLM settings (org-scoped)", () => {
     server.use(
       http.delete(`${BASE}/v1/orgs/org_a/llm-settings`, ({ request }) => {
         path = new URL(request.url).pathname;
-        return HttpResponse.json({ message: "reset", org_id: "org_a" });
+        return HttpResponse.json({ provider: "openai", model: "default-model" });
       }),
     );
     const r = await newClient().deleteLLMSettings("org_a");
     expect(path).toBe("/v1/orgs/org_a/llm-settings");
-    expect(r.message).toBe("reset");
+    expect(r.model).toBe("default-model");
   });
 });
 
@@ -1308,5 +1304,253 @@ describe("API keys", () => {
     await newClient().revokeAPIKey("key_1");
     expect(method).toBe("DELETE");
     expect(path).toBe("/v1/tenants/t_default/api-keys/key_1");
+  });
+});
+
+describe("Tenant quota", () => {
+  it("getTenantQuota GETs the quota path and decodes usage", async () => {
+    server.use(
+      http.get(`${BASE}/v1/tenants/t_a/quota`, () =>
+        HttpResponse.json({ max_storage_gb: 5, used_storage_gb: 1.25 }),
+      ),
+    );
+    const q = await newClient().getTenantQuota("t_a");
+    expect(q).toEqual({ max_storage_gb: 5, used_storage_gb: 1.25 });
+  });
+
+  it("updateTenantQuota PUTs the body and invalidates cached reads", async () => {
+    let stored = 5;
+    let gets = 0;
+    let body: unknown = null;
+    server.use(
+      http.get(`${BASE}/v1/tenants/t_a/quota`, () => {
+        gets++;
+        return HttpResponse.json({ max_storage_gb: stored, used_storage_gb: 0 });
+      }),
+      http.put(`${BASE}/v1/tenants/t_a/quota`, async ({ request }) => {
+        body = await request.json();
+        stored = (body as { max_storage_gb: number }).max_storage_gb;
+        return HttpResponse.json({ max_storage_gb: stored, used_storage_gb: 0 });
+      }),
+    );
+    const client = newClient({ cache: true });
+    expect((await client.getTenantQuota("t_a")).max_storage_gb).toBe(5);
+    await client.getTenantQuota("t_a");
+    expect(gets).toBe(1);
+    const updated = await client.updateTenantQuota("t_a", { max_storage_gb: 0 });
+    expect(body).toEqual({ max_storage_gb: 0 });
+    expect(updated.max_storage_gb).toBe(0);
+    expect((await client.getTenantQuota("t_a")).max_storage_gb).toBe(0);
+    expect(gets).toBe(2);
+  });
+
+  it("updateTenantQuota maps 403 to AuthorizationError", async () => {
+    server.use(
+      http.put(`${BASE}/v1/tenants/t_a/quota`, () =>
+        HttpResponse.json({ error: { code: "forbidden", message: "admin only" } }, { status: 403 }),
+      ),
+    );
+    await expect(
+      newClient().updateTenantQuota("t_a", { max_storage_gb: 1 }),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
+  it("surfaces insufficient_storage (507) as ServerError with the code", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, () =>
+        HttpResponse.json(
+          { error: { code: "insufficient_storage", message: "quota exceeded" } },
+          { status: 507 },
+        ),
+      ),
+    );
+    const err = await newClient()
+      .addDocuments("i_x", [{ text: "x" }])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServerError);
+    expect((err as ServerError).code).toBe("insufficient_storage");
+  });
+});
+
+describe("Admin: API-key status and backups", () => {
+  it("getAPIKeyStatus GETs the admin path and decodes posture + rows", async () => {
+    server.use(
+      http.get(`${BASE}/v1/admin/api-key-status`, () =>
+        HttpResponse.json({
+          tenants: [{ tenant_id: "t_a", tenant_name: "Acme", active_keys: 3, locked: true }],
+          strict_auth: true,
+          admin_token_configured: true,
+          metrics_public: false,
+          tenant_key_enforcement: true,
+        }),
+      ),
+    );
+    const r = await newClient().getAPIKeyStatus();
+    expect(r.tenants?.[0]).toEqual({
+      tenant_id: "t_a",
+      tenant_name: "Acme",
+      active_keys: 3,
+      locked: true,
+    });
+    expect(r.strict_auth).toBe(true);
+    expect(r.tenant_key_enforcement).toBe(true);
+  });
+
+  it("listAllBackups sends only the supplied filters as query params", async () => {
+    let url: URL | null = null;
+    server.use(
+      http.get(`${BASE}/v1/admin/backups`, ({ request }) => {
+        url = new URL(request.url);
+        return HttpResponse.json({
+          backups: [
+            {
+              id: "b1",
+              tenant_id: "t_a",
+              tenant_name: "Acme",
+              index_id: "i_1",
+              index_name: "docs",
+              created_at: "2026-06-17T00:00:00Z",
+              total_size: 1024,
+              num_chunks: 2,
+            },
+          ],
+          next_cursor: "cur2",
+          total: 5,
+        });
+      }),
+    );
+    const client = newClient();
+    const r = await client.listAllBackups({
+      tenantId: "t_a",
+      indexId: "i_1",
+      limit: 1,
+      cursor: "cur1",
+    });
+    expect(url!.pathname).toBe("/v1/admin/backups");
+    expect(Object.fromEntries(url!.searchParams)).toEqual({
+      tenant_id: "t_a",
+      index_id: "i_1",
+      limit: "1",
+      cursor: "cur1",
+    });
+    expect(r.next_cursor).toBe("cur2");
+    expect(r.total).toBe(5);
+    expect(r.backups[0]!.num_chunks).toBe(2);
+
+    await client.listAllBackups({}, { bypassCache: true });
+    expect(url!.search).toBe("");
+  });
+
+  it("listAllBackups maps 403 to AuthorizationError", async () => {
+    server.use(
+      http.get(`${BASE}/v1/admin/backups`, () =>
+        HttpResponse.json({ error: { code: "forbidden", message: "admin only" } }, { status: 403 }),
+      ),
+    );
+    await expect(newClient().listAllBackups()).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
+  it("getBackupStatus decodes the schedule status", async () => {
+    server.use(
+      http.get(`${BASE}/v1/admin/backups/status`, () =>
+        HttpResponse.json({
+          enabled: true,
+          schedule: "0 2 * * *",
+          interval_seconds: 86400,
+          keep: 7,
+          runs_ok: 4,
+          runs_failed: 1,
+          last_run_ok: true,
+          next_run: "2026-06-18T02:00:00Z",
+        }),
+      ),
+    );
+    const s = await newClient().getBackupStatus();
+    expect(s.enabled).toBe(true);
+    expect(s.keep).toBe(7);
+    expect(s.runs_failed).toBe(1);
+    expect(s.next_run).toBe("2026-06-18T02:00:00Z");
+  });
+
+  it("restoreBackup sends a bare dest index id as { dest_index }", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/backups/:id/restore`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ status: "restored", index_id: "i_new" });
+      }),
+    );
+    await newClient().restoreBackup("t/i/1", "i_new");
+    expect(body).toEqual({ dest_index: "i_new" });
+  });
+
+  it("restoreBackup forwards the optional restored-index name", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/backups/:id/restore`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ status: "restored", index_id: "i_new" });
+      }),
+    );
+    await newClient().restoreBackup("t/i/1", { dest_index: "i_new", name: "Docs copy" });
+    expect(body).toEqual({ dest_index: "i_new", name: "Docs copy" });
+  });
+});
+
+describe("New request and response fields", () => {
+  it("search forwards group_by and max_per_doc", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/search`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ results: [], total: 0 });
+      }),
+    );
+    await newClient().search({ indexId: "i_x", query: "q", group_by: "document", max_per_doc: 2 });
+    expect(body).toEqual({ query: "q", group_by: "document", max_per_doc: 2 });
+  });
+
+  it("createAPIKey forwards role only when set", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/api-keys`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: "k", plaintext: "s" }, { status: 201 });
+      }),
+    );
+    const client = newClient();
+    await client.createAPIKey({ name: "n", user_id: "u", role: "admin" });
+    await client.createAPIKey({ name: "n", user_id: "u" });
+    expect(bodies).toEqual([
+      { name: "n", user_id: "u", role: "admin" },
+      { name: "n", user_id: "u" },
+    ]);
+  });
+
+  it("createIndex passes chunk_size and chunk_overlap through", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(
+          { id: "i", name: "docs", chunk_size: 512, chunk_overlap: 64 },
+          { status: 201 },
+        );
+      }),
+    );
+    const idx = await newClient().createIndex({ name: "docs", chunk_size: 512, chunk_overlap: 64 });
+    expect(body).toEqual({ name: "docs", chunk_size: 512, chunk_overlap: 64 });
+    expect(idx.chunk_size).toBe(512);
+    expect(idx.chunk_overlap).toBe(64);
+  });
+
+  it("addDocuments decodes response warnings", async () => {
+    server.use(
+      http.post(`${BASE}/v1/tenants/t_default/indexes/i_x/documents`, () =>
+        HttpResponse.json({ added: 1, warnings: ["chunk_size ignored"] }, { status: 201 }),
+      ),
+    );
+    const r = await newClient().addDocuments("i_x", [{ text: "x" }]);
+    expect(r.warnings).toEqual(["chunk_size ignored"]);
   });
 });
