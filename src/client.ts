@@ -679,8 +679,13 @@ export class Client {
   /** POST /v1/tenants/{tid}/indexes/{iid}/search (hybrid) */
   async search(req: SearchRequest, opts: RequestOptions = {}): Promise<SearchResponse> {
     const tenantId = req.tenantId ?? this.requireTenant(opts);
-    if (!req.query && (!req.vector || req.vector.length === 0) && !req.vector_b64) {
-      throw new GraphANNError("search() requires `query`, `vector`, or `vector_b64`");
+    if (
+      !req.query &&
+      (!req.vector || req.vector.length === 0) &&
+      !req.vector_b64 &&
+      !req.related_to
+    ) {
+      throw new GraphANNError("search() requires `query`, `vector`, `vector_b64`, or `related_to`");
     }
     const body: Record<string, unknown> = {};
     if (req.query !== undefined) body.query = req.query;
@@ -695,6 +700,11 @@ export class Client {
     if (req.hybrid !== undefined) body.hybrid = req.hybrid;
     if (req.group_by !== undefined) body.group_by = req.group_by;
     if (req.max_per_doc !== undefined) body.max_per_doc = req.max_per_doc;
+    if (req.related_to !== undefined) body.related_to = req.related_to;
+    if (req.hops !== undefined) body.hops = req.hops;
+    if (req.fanout !== undefined) body.fanout = req.fanout;
+    if (req.novel_only !== undefined) body.novel_only = req.novel_only;
+    if (req.diversity !== undefined) body.diversity = req.diversity;
     return this.send<SearchResponse>(
       {
         method: "POST",

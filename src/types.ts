@@ -184,6 +184,8 @@ export type SearchRequest = Partial<SearchRequestBody> & {
   tenantId?: TenantID;
 };
 
+export type RelatedHop = components["schemas"]["RelatedHop"];
+
 export type SearchResult = components["schemas"]["SearchResult"];
 
 export type SearchResponse = components["schemas"]["SearchResponse"];
@@ -219,7 +221,7 @@ export type MultiSearchResponse = components["schemas"]["MultiSearchResponse"];
 // Jobs (hot model switch + read/list)
 // ---------------------------------------------------------------------------
 
-export type JobKind = "reembed";
+export type JobKind = NonNullable<components["schemas"]["Job"]["kind"]>;
 export type JobStatus = "queued" | "running" | "completed" | "failed";
 
 export type JobProgress = components["schemas"]["JobProgress"];

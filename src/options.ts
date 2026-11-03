@@ -11,6 +11,9 @@ export interface ClientOptions {
   /** API key — sent in the `X-API-Key` header. */
   apiKey?: string;
 
+  /** Node admin token — sent in the `X-GraphANN-Admin-Token` header. */
+  nodeAdminToken?: string;
+
   /**
    * Default tenant id. If set, every method that needs a tenant uses this
    * unless a per-request override is provided. Forwarded as `X-Tenant-ID`
@@ -72,6 +75,7 @@ export interface ClientOptions {
 export interface ResolvedClientOptions {
   baseUrl: string;
   apiKey: string | undefined;
+  nodeAdminToken: string | undefined;
   tenantId: TenantID | undefined;
   timeout: number;
   maxRetries: number;
@@ -88,7 +92,7 @@ export interface ResolvedClientOptions {
 }
 
 /** SDK version. Update on every release. */
-export const SDK_VERSION = "0.10.1";
+export const SDK_VERSION = "0.11.0";
 
 /** Best-effort runtime/platform detection for the User-Agent string. */
 function detectRuntime(): { runtime: string; platform: string } {
@@ -153,6 +157,7 @@ export function resolveOptions(options: ClientOptions): ResolvedClientOptions {
   return {
     baseUrl,
     apiKey: options.apiKey,
+    nodeAdminToken: options.nodeAdminToken,
     tenantId: options.tenantId,
     timeout: options.timeout ?? 30_000,
     maxRetries: options.maxRetries ?? 3,

@@ -123,6 +123,7 @@ export type {
   SearchFilter,
   SearchRequest,
   SearchResponse,
+  RelatedHop,
   SearchResult,
   ServerErrorEnvelope,
   SharedIndexListResponse,

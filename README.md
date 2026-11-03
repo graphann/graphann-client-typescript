@@ -16,7 +16,7 @@ vector database.
 Install the built package from the GitHub release:
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.1/graphann-client-0.10.1.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.11.0/graphann-client-0.11.0.tgz
 ```
 
 ## Quickstart
@@ -86,6 +86,7 @@ A complete end-to-end example lives in
 new Client({
   baseUrl: "https://api.graphann.com",
   apiKey: "ak_...",       // X-API-Key header
+  // nodeAdminToken: "...", // X-GraphANN-Admin-Token header (admin routes)
   tenantId: "t_...",       // Default tenant for tenant-scoped methods
   timeout: 30_000,         // ms — per-request timeout
   maxRetries: 3,           // 0 disables retries
@@ -164,7 +165,7 @@ Status mapping:
 | Tenants   | `listTenants`, `createTenant`, `getTenant`, `deleteTenant`, `getTenantQuota`, `updateTenantQuota` |
 | Indexes   | `listIndexes`, `createIndex`, `getIndex`, `deleteIndex`, `updateIndex`, `getIndexStatus`, `compactIndex`, `clearIndex`, `flushIndex`, `rebuildGraph`, `getLiveStats`, `compactAllIndexes` |
 | Documents | `addDocuments`, `importDocuments`, `listDocuments` (async iterator), `getDocument`, `deleteDocument`, `bulkDeleteDocuments`, `bulkDeleteByExternalIds`, `cleanupOrphans`, `getChunk`, `deleteChunks`, `getPendingStatus`, `processPending`, `clearPending`, `runIndexGC`, `runAdminGC` |
-| Search    | `search` (text via `query`, vector via `vector`), `batchSearch`, `multiSearch` |
+| Search    | `search` (text via `query`, vector via `vector`, related via `related_to`/`hops`/`fanout`/`novel_only`/`diversity`), `batchSearch`, `multiSearch` |
 | Jobs      | `switchEmbeddingModel`, `getJob`, `listJobs` |
 | Cluster   | `getClusterNodes`, `getClusterShards`, `getClusterHealth` |
 | LLM       | `getLLMSettings`, `updateLLMSettings`, `deleteLLMSettings` |

@@ -4,6 +4,25 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.11.0 - 2026-11-03
+
+### Added
+
+- Related search: `search()` accepts `related_to`, `hops` (1-3), `fanout`
+  (1-50), `novel_only` and `diversity` (0-1), and needs no `query` or `vector`
+  when `related_to` is set. Batch queries carry them too.
+- `SearchResult` gains `path` (`RelatedHop[]`), `support` and `direct_score`;
+  `SearchResponse` gains `exhaustive` and `shards_probed`; `BatchSearchResult`
+  gains `exhaustive`. New `RelatedHop` type.
+- `nodeAdminToken` client option, sent as `X-GraphANN-Admin-Token`.
+- Spec-driven coverage test: every operation in the vendored spec must have an
+  SDK call.
+
+### Changed
+
+- `JobKind` follows the spec: `reembed`, `compaction`, `backup`, `restore`.
+- Regenerated types from spec commit c1834e3b.
+
 ## 0.10.1 - 2026-09-30
 
 ### Added

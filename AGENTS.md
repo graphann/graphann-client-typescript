@@ -8,7 +8,7 @@ current source (`src/client.ts`, `src/types.ts`, `src/options.ts`,
 ## Install
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.10.1/graphann-client-0.10.1.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.11.0/graphann-client-0.11.0.tgz
 ```
 
 ESM-first with a CommonJS fallback. Runs on Node 20+, Deno, Bun,
@@ -22,6 +22,7 @@ import { Client } from "@graphann/client";
 const client = new Client({
   baseUrl: "https://api.graphann.com", // required; trailing slash stripped
   apiKey: "ak_...",                    // sent as the X-API-Key header
+  // nodeAdminToken: "...",            // sent as X-GraphANN-Admin-Token
   tenantId: "t_...",                   // default tenant for tenant-scoped calls
   timeout: 30_000,                     // ms, default 30000
   maxRetries: 3,                       // 429/503/network, default 3

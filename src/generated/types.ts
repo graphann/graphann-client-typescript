@@ -121,6 +121,10 @@ export interface paths {
      * @description Creates a new tenant. When `id` is provided the operation is
      *     idempotent -- if a tenant with that ID already exists it is returned
      *     as-is. When `id` is omitted a random UUID is generated.
+     *
+     *     Needs the node admin token once `--strict-auth` is on or any tenant holds a key. A
+     *     caller without the node admin token that names an existing `id` gets 409; with the token
+     *     the existing tenant is returned. A license that caps tenants refuses creation with 403.
      */
     post: operations["createTenant"];
     delete?: never;
@@ -245,6 +249,9 @@ export interface paths {
      *
      *     **`approximate`** changes propagate to a loaded LiveIndex immediately;
      *     no server restart required.
+     *
+     *     Invalid embedding fields and an invalid `compression` return 400. An
+     *     index that disappears during the update returns 404.
      */
     patch: operations["updateIndex"];
     trace?: never;
@@ -300,12 +307,21 @@ export interface paths {
      *     document produces.
      *
      *     Requires an embedding server to be configured.
+     *
+     *     Validation (400): a metadata key that starts with the reserved `_graphann_` prefix; a
+     *     `vector` whose length is not the index dimension; a batch where some documents carry
+     *     `vector` and others do not. `defer_save` and `bulk` accept `true`, `false`, `1` or `0`.
+     *     With `--auto-bulk` (on by default) the delta graph of a bulk ingest builds on the first
+     *     search or flush, so that search can be slower.
      */
     post: operations["addDocuments"];
     /**
      * Bulk delete documents by internal IDs
      * @description Deletes multiple documents by their internal integer document IDs.
      *     All chunks belonging to the specified documents are permanently deleted.
+     *
+     *     `documents_deleted` counts the documents that lost at least one chunk, so an
+     *     unknown ID counts zero; `deleted_per_doc` carries the chunks removed per document.
      */
     delete: operations["bulkDeleteDocuments"];
     options?: never;
@@ -328,6 +344,9 @@ export interface paths {
      * @description Deletes multiple documents by their client-provided external IDs
      *     (the `id` field set when adding documents). All chunks belonging
      *     to the matched documents are permanently deleted.
+     *
+     *     `documents_deleted` counts the documents that lost at least one chunk, so an
+     *     unknown ID counts zero; `deleted_per_id` carries the chunks removed per ID.
      */
     delete: operations["bulkDeleteByExternalIDs"];
     options?: never;
@@ -384,6 +403,9 @@ export interface paths {
     /**
      * Delete a document
      * @description Permanently deletes a document and all its chunks.
+     *
+     *     A document ID with no chunks returns 200 with `deleted_chunks: 0`; 404 means the tenant or
+     *     index does not exist.
      */
     delete: operations["deleteDocument"];
     options?: never;
@@ -400,7 +422,7 @@ export interface paths {
     };
     /**
      * Get a chunk
-     * @description Retrieves a specific chunk by its UUID, including text and metadata.
+     * @description Retrieves a specific chunk by its integer chunk ID, including text and metadata.
      */
     get: operations["getChunk"];
     put?: never;
@@ -409,6 +431,10 @@ export interface paths {
      * Delete a chunk
      * @description Permanently deletes chunks. Requires a JSON body with `chunk_ids`
      *     even though a single chunk ID is in the path (for batch compatibility).
+     *
+     *     The chunks to delete come from the body's `chunk_ids`; the `{chunkID}` path segment is not
+     *     read. `deleted` counts the chunks that were tombstoned; an ID that names no live chunk
+     *     in the delta (an unknown ID, or a chunk already compacted into the base) is skipped.
      */
     delete: operations["deleteChunk"];
     options?: never;
@@ -432,11 +458,14 @@ export interface paths {
      *     set. A text query is embedded server-side and searched
      *     semantically (dense HNSW); a vector search compares the given
      *     vector directly against the index. Default `k` is 10 when
-     *     omitted or zero.
+     *     omitted, zero or negative; above 10000 returns 400. Identical repeated
+     *     queries are served for 60 s from a result cache that any write to the
+     *     index invalidates (`--query-cache-size`, 1024 entries by default, 0
+     *     disables).
      *
      *     Supplying both a query and a vector is not what makes a search
-     *     "hybrid" -- it is not a supported combination at all; only one
-     *     of the two may be set. Hybrid retrieval is the separate `hybrid`
+     *     "hybrid". Setting both returns 400, and so does `vector` with
+     *     `vector_b64`. Hybrid retrieval is the separate `hybrid`
      *     boolean below, which applies only to text queries.
      *
      *     Set `hybrid: true` to fuse the dense (semantic) results with a
@@ -468,8 +497,9 @@ export interface paths {
      * @description Runs multiple independent queries against one index in a single
      *     HTTP request. Each entry in `queries` is a full `SearchRequest`,
      *     so a batch can mix text and vector queries, per-query `k`,
-     *     filters, rerank and `hybrid` settings -- anything valid on
-     *     `/search` is valid here. Exists because search throughput is
+     *     filters, rerank, `hybrid`, `group_by` and `related_to` settings,
+     *     validated and grouped as on `/search`. A sharded index returns 400:
+     *     send each query to `/search`, which runs the scatter-gather. Exists because search throughput is
      *     bound by per-request socket overhead, not by the search itself;
      *     amortising many queries across one request removes most of that
      *     overhead. Intended for offline and pipeline callers (evaluation
@@ -498,8 +528,10 @@ export interface paths {
     put?: never;
     /**
      * Trigger an immediate compaction of the index
-     * @description Synchronously compacts the index, merging the live delta layer into
-     *     a new base. The compaction respects the index's stored `compression`
+     * @description Starts a compaction in the background and returns at once with
+     *     `status: compacting`. The compaction merges the live delta layer into
+     *     a new base; `compaction completed` appears in the server log and
+     *     `last_compacted_at` changes on the index when it ends. The compaction respects the index's stored `compression`
      *     field — recompute-mode indexes stay recompute-mode after compact;
      *     PQ indexes stay PQ. To change compression mode for an existing
      *     index, use the offline `graphann recompact` CLI tool.
@@ -507,10 +539,14 @@ export interface paths {
      *     Two-delta safety: writes during compaction land in a fresh delta
      *     and are preserved through the swap. No acked write is lost.
      *
-     *     Auto-compaction triggers (size threshold / delta-to-base ratio /
-     *     pending delta-chunk count / max delta age / daily schedule) on the
-     *     server can fire compaction without operator intervention; this
-     *     endpoint is for explicit/manual invocation.
+     *     Auto-compaction triggers fire compaction without operator
+     *     intervention: a delta of 100 MiB, a delta of 1/16 of a base of at
+     *     least 1 MiB, 10,000 delta chunks, a delta older than 24 h (2 indexes
+     *     per cycle), and the daily UTC times of `--compact-schedule`. The
+     *     scheduler checks every 60 s. This endpoint is for explicit
+     *     invocation: it hands the index to the compaction scheduler, or
+     *     runs the compaction directly when no scheduler is wired, and it
+     *     returns 409 while a compaction of the index is in flight.
      *
      *     The count trigger measures *pending delta chunks* — live plus
      *     tombstoned (`DeltaChunks + DeletedChunks`) — not tombstones alone.
@@ -586,9 +622,10 @@ export interface paths {
     };
     /**
      * Get live index statistics
-     * @description Returns detailed statistics for a live (in-memory) index including
-     *     base/delta chunk counts, deleted chunks, and dirty state. If the index
-     *     is not loaded as a live index, returns basic metadata from disk.
+     * @description Returns detailed statistics for a live (in-memory) index including base/delta chunk
+     *     counts, deleted chunks, and dirty state. If the index is not loaded, or its live
+     *     statistics cannot be read, returns basic metadata from disk. `num_chunks` and
+     *     `num_docs` are present in both cases.
      */
     get: operations["getLiveIndexStats"];
     put?: never;
@@ -618,6 +655,9 @@ export interface paths {
      *     delta HNSW graph itself is deferred and built once, concurrently,
      *     here -- bulk-ingested data is not searchable until this endpoint
      *     runs.
+     *
+     *     An index that is not loaded in memory was saved when it was unloaded, so a flush
+     *     of it answers 200 with `flushed: true` and writes nothing.
      */
     post: operations["flushIndex"];
     delete?: never;
@@ -667,6 +707,12 @@ export interface paths {
      *     processing (embedding, indexing, compaction). Returns
      *     immediately with status `processing`. Use the `/pending` endpoint
      *     to check progress.
+     *
+     *     Import keeps each document's text, ID, object `metadata`, expiry and upsert flag. A
+     *     document with `vector`, `vector_b64`, `repo_id`, `file_path` or `commit_sha` returns
+     *     400: send it to `POST .../documents`, which keeps them. A metadata key with the
+     *     reserved `_graphann_` prefix returns 400, and the documents-per-index quota answers
+     *     429 `quota_exceeded`, as on `POST .../documents`.
      */
     post: operations["importDocuments"];
     delete?: never;
@@ -853,9 +899,10 @@ export interface paths {
     };
     /**
      * List jobs across every tenant (admin only)
-     * @description Lists jobs across all tenants. Requires `Admin` role when auth
-     *     is active. Permissive (no-auth) mode allows access. Supports
-     *     `status`, `cursor`, and `limit` query parameters.
+     * @description Lists jobs. A caller authenticated with a tenant key sees that tenant's jobs; a caller
+     *     with the node admin token sees every tenant's jobs. A caller without credentials, in the
+     *     default auth mode, sees the jobs of tenants that hold no key. Supports `status`, `cursor`
+     *     and `limit` query parameters.
      */
     get: operations["listAllJobs"];
     put?: never;
@@ -879,8 +926,8 @@ export interface paths {
      *     status, progress, timestamps, error). API keys passed when the
      *     job was created are NEVER echoed back.
      *
-     *     Authorization: when auth is active the request must be from
-     *     the same tenant that owns the job; otherwise 403 is returned.
+     *     Authorization: a job of another tenant answers 404, as if it did not exist. Repeated
+     *     wrong keys answer 429 with `Retry-After: 60`.
      */
     get: operations["getJob"];
     put?: never;
@@ -1154,9 +1201,9 @@ export interface paths {
     };
     /**
      * Cluster health probe
-     * @description Cheap aggregate cluster health check. Intentionally
-     *     unauthenticated — matches `/metrics` policy so liveness probes
-     *     and reverse proxies can wire it up without secret rotation.
+     * @description Cheap aggregate cluster health check. Served without credentials
+     *     in the default auth mode; under `--strict-auth` it needs a tenant
+     *     key or the node admin token, unlike `/health` and `/ready`.
      *
      *     Returns 200 in `ok` and `degraded` states; 503 in `unhealthy`
      *     (no nodes alive or no Raft leader). Single-node / non-clustered
@@ -1575,7 +1622,8 @@ export interface components {
        * @description Optional override of the backend base URL. SSRF-validated at
        *     PATCH time (public http/https hosts only) and re-guarded at
        *     connect time, so it cannot point at loopback/RFC1918/metadata
-       *     ranges.
+       *     ranges, unless the server runs with
+       *     `--allow-private-embedding-endpoints`.
        */
       embedding_endpoint?: string;
       /** @description Expected output dimension for the per-index embedding override. */
@@ -1586,7 +1634,11 @@ export interface components {
        */
       embedding_api_key_env?: string;
     };
-    /** @description Full index metadata as stored by the tenant manager. */
+    /**
+     * @description Index metadata as stored by the tenant manager. In the org index lists an index found
+     *     on disk but not in the tenant's catalog is listed with `id`, `path` and `status` only;
+     *     its counts, dimension and timestamps are zero.
+     */
     IndexInfo: {
       id?: string;
       tenant_id?: string;
@@ -1604,10 +1656,9 @@ export interface components {
       updated_at?: string;
       /**
        * Format: date-time
-       * @description Wall-clock time of the most recent successful compaction.
-       *     Absent when the index has never been compacted (either
-       *     genuinely fresh, or compacted before this field existed --
-       *     callers fall back to `created_at` in that case).
+       * @description Wall-clock time of the most recent successful compaction. Absent when the index
+       *     was never compacted (fresh, or compacted before this field existed); callers fall
+       *     back to `created_at` in that case.
        */
       last_compacted_at?: string;
       /** @description User ID of the index's creator, if known. */
@@ -2001,7 +2052,7 @@ export interface components {
        */
       vector_b64?: string;
       /**
-       * @description Maximum number of results to return.
+       * @description Maximum number of results to return. 0 or a negative value means 10; above 10000 returns 400.
        * @default 10
        */
       k: number;
@@ -2010,7 +2061,8 @@ export interface components {
        * @description When true, rescore the top-`candidate_k` HNSW candidates with the
        *     server-configured cross-encoder reranker and return the top-`rerank_k`
        *     (or top-`k` if `rerank_k` is unset) by reranker score. Silently no-op
-       *     when the server has no reranker configured (`--reranker-url` unset),
+       *     when the server has no reranker configured (none of `--reranker-url`, `--reranker-builtin` or
+       *     `--reranker-onnx-model` set),
        *     so flipping this on a non-rerank-aware deployment is safe.
        *
        *     Reranking only applies to the text-`query` path. Vector-only
@@ -2069,6 +2121,66 @@ export interface components {
        *     (no effect, no validation) when `group_by` is unset.
        */
       max_per_doc?: number;
+      /**
+       * @description The external ID of a stored document. When set, the request is a
+       *     related search from that document instead of a query: the server
+       *     sums the vectors it holds for the document's live chunks (stored
+       *     vectors for recent writes, decoded codes for compacted rows),
+       *     normalises the sum and searches from it. Results hold one entry
+       *     per document and never the source itself, whatever its number of
+       *     chunks. No text is embedded. Must not be combined with `query`,
+       *     `vector`, `hybrid`, `rerank` or `group_by` (400); `k` is at most
+       *     100. `filter` and `ef_search` apply as usual, and `filter` applies
+       *     to every hop of a walk. Unknown or deleted document: 404. Not
+       *     supported on a sharded index (400). Empty (the default) leaves the
+       *     search unchanged. The result cache does not apply.
+       */
+      related_to?: string;
+      /**
+       * @description Length of a related walk; needs `related_to`. 1 (the default) is
+       *     the direct related search. With 2 or 3 the server expands the
+       *     `fanout` best documents of each hop, ranks each hop by codes only,
+       *     and scores a path as the product of its hop scores, each clamped
+       *     to [0, 1]. Results are the documents reached at hop 2 or later,
+       *     ranked by their best path, with `path`, `support` and
+       *     `direct_score` set, and the response sets `exhaustive`. A walk of
+       *     2 hops runs 1 + `fanout` related searches; one of 3 runs
+       *     1 + 2 * `fanout`.
+       */
+      hops?: number;
+      /**
+       * @description Documents each hop of a walk expands, and the length of each hop's
+       *     list. Needs `hops` of 2 or 3.
+       * @default 10
+       */
+      fanout: number;
+      /**
+       * @description Drop walk results that the source's own related list of its 50
+       *     nearest documents already holds, so only documents reached through
+       *     other documents remain. Needs `hops` of 2 or 3.
+       * @default false
+       */
+      novel_only: boolean;
+      /**
+       * Format: float
+       * @description Weight of the diverse frontier pick of a walk. Each hop expands
+       *     the documents with the best path score minus `diversity` times
+       *     their largest similarity to the documents it already picked, so
+       *     a near-duplicate or a same-template sibling of a picked document
+       *     loses to a distinct one. 0 expands the `fanout` best paths. Needs
+       *     `hops` of 2 or 3.
+       * @default 0
+       */
+      diversity: number;
+    };
+    RelatedHop: {
+      /** @description External ID of the document this hop reached. */
+      id?: string;
+      /**
+       * Format: float
+       * @description Similarity of the hop, as a related search scores it.
+       */
+      score?: number;
     };
     SearchResult: {
       /**
@@ -2099,6 +2211,21 @@ export interface components {
        *     back to `score` otherwise.
        */
       rerank_score?: number;
+      /**
+       * @description Set by a related walk (`hops` of 2 or 3): the best path from the
+       *     source to this document, the source left out. `score` is then the
+       *     product of the path's hop scores.
+       */
+      path?: components["schemas"]["RelatedHop"][];
+      /** @description Set by a related walk; the number of paths the walk found to this document. */
+      support?: number;
+      /**
+       * Format: float
+       * @description Set by a related walk; the similarity of this document to the
+       *     source itself. A path score well above it marks a relation that a
+       *     direct related search would rank low.
+       */
+      direct_score?: number;
       /** @description Chunk metadata merged with arbitrary user metadata. */
       metadata?: {
         /**
@@ -2130,6 +2257,13 @@ export interface components {
       };
     };
     SearchResponse: {
+      /**
+       * @description Set by a related walk: true when no path the walk left unexplored
+       *     can score above its k-th result, so the top k are the best paths
+       *     of the whole walk; false when pruning may have hidden a better
+       *     path.
+       */
+      exhaustive?: boolean;
       results?: components["schemas"]["SearchResult"][];
       total?: number;
       /** @description Whether one or more shards did not return complete results. */
@@ -2138,6 +2272,8 @@ export interface components {
       shards_total?: number;
       /** @description Shards that returned complete results. */
       shards_ok?: number;
+      /** @description Shards the query visited. Lower than shards_total when content routing pruned shards that cannot hold a closer result. */
+      shards_probed?: number;
       /** @description Identifiers of degraded shards, when present. */
       degraded_shards?: string[];
       /** @description Whether the server applied reranking. May be absent on older servers or when reranking was not requested. */
@@ -2225,9 +2361,15 @@ export interface components {
       base_deleted_fraction?: number;
       /** @description Rebuild advisory: true when base_deleted_fraction exceeds the ~5% threshold. Advisory only -- the server never auto-compacts on it. Always false in the not-loaded fallback. */
       rebuild_recommended?: boolean;
-      /** @description Stored chunk count (from metadata). */
+      /**
+       * @description Chunk count: the live chunk count of a loaded index, or the stored count from
+       *     metadata in the fallback.
+       */
       num_chunks?: number;
-      /** @description Stored document count (from metadata). */
+      /**
+       * @description Document count: the live document count of a loaded index, or the stored count
+       *     from metadata in the fallback.
+       */
       num_docs?: number;
     };
     ImportDocumentsRequest: {
@@ -2304,8 +2446,7 @@ export interface components {
       /** @description Text query for semantic search. */
       query: string;
       /**
-       * @description Maximum results. 0 (default) returns all relevant results with
-       *     no limit.
+       * @description Maximum results. 0 (default), a negative value or a value above 10000 means 10000.
        * @default 0
        */
       k: number;
@@ -2320,7 +2461,7 @@ export interface components {
        */
       sources?: string[];
       /**
-       * @description Search expansion factor for HNSW traversal.
+       * @description Search expansion factor for HNSW traversal. 0 or a negative value means 500; above 2000 is clamped to 2000.
        * @default 500
        */
       ef_search: number;
@@ -2438,8 +2579,12 @@ export interface components {
      */
     Job: {
       job_id?: string;
-      /** @enum {string} */
-      kind?: "reembed";
+      /**
+       * @description `reembed` is a hot model switch. `compaction`, `backup` and `restore` are records of
+       *     work the schedulers and handlers run, listed so they show in the job views.
+       * @enum {string}
+       */
+      kind?: "reembed" | "compaction" | "backup" | "restore";
       tenant_id?: string;
       index_id?: string;
       /** @enum {string} */
@@ -2455,6 +2600,7 @@ export interface components {
     };
     JobListResponse: {
       jobs?: components["schemas"]["Job"][];
+      /** @description Number of jobs in this page. */
       total?: number;
       /** @description Cursor to pass back as `?cursor=` for the next page. */
       next_cursor?: string;
@@ -2665,7 +2811,11 @@ export interface components {
        *     On write a masked sentinel preserves the existing key.
        */
       api_key?: string;
-      /** @description Optional base URL override. SSRF-validated server-side. */
+      /**
+       * @description Optional base URL override. SSRF-validated server-side: only
+       *     public http and https hosts are accepted, whatever the
+       *     embedding-endpoint switches say.
+       */
       base_url?: string;
       /** Format: float */
       temperature?: number;
@@ -2741,6 +2891,8 @@ export interface components {
       queries: components["schemas"]["SearchRequest"][];
     };
     BatchSearchResult: {
+      /** @description As `SearchResponse.exhaustive`, for a related walk in the batch. */
+      exhaustive?: boolean;
       results?: components["schemas"]["SearchResult"][];
       total?: number;
       /** @description Set instead of `results`/`total` when this one query failed; the rest of the batch is unaffected. */
@@ -2988,6 +3140,29 @@ export interface components {
       };
     };
     /**
+     * @description Too many requests: a tenant over its share of the search
+     *     concurrency gate under `--strict-auth`, or repeated wrong keys
+     *     from one client address. Error code `rate_limited`.
+     */
+    RateLimited: {
+      headers: {
+        "Retry-After": components["headers"]["RetryAfter"];
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["ErrorEnvelope"];
+      };
+    };
+    /** @description The request body is larger than 16 MiB. Error code `payload_too_large`. */
+    PayloadTooLarge: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["ErrorEnvelope"];
+      };
+    };
+    /**
      * @description Authentication required. Returned when a presented API key is not
      *     valid, and when the addressed tenant has at least one API key but
      *     the request carries none (per-tenant key rule; see
@@ -3116,6 +3291,43 @@ export interface components {
         };
       };
     };
+    /** @description Conflict with the current state. Error code `conflict`. */
+    Conflict: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["ErrorEnvelope"];
+      };
+    };
+    /**
+     * @description The tenant's storage quota, or the licensed disk limit, is used up. Error
+     *     code `insufficient_storage`.
+     */
+    InsufficientStorage: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["ErrorEnvelope"];
+      };
+    };
+    /**
+     * @description Search cannot run now. The JSON envelope carries `index_not_ready` (the index is still
+     *     being built) or `service_unavailable` (no search service, or a shard fencing). When the
+     *     node's search concurrency gate stays full for 2 s the body is the plain text
+     *     `server overloaded` with `Retry-After: 2`.
+     */
+    SearchUnavailable: {
+      headers: {
+        "Retry-After": components["headers"]["RetryAfter"];
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["ErrorEnvelope"];
+        "text/plain": string;
+      };
+    };
   };
   parameters: {
     /**
@@ -3157,7 +3369,12 @@ export interface components {
     backupID: string;
   };
   requestBodies: never;
-  headers: never;
+  headers: {
+    /** @description Seconds to wait before retrying. */
+    RetryAfter: number;
+    /** @description The request ID, echoed from the request's `X-Request-ID` or generated. */
+    RequestID: string;
+  };
   pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -3260,6 +3477,7 @@ export interface operations {
           "application/json": components["schemas"]["LicenseStatus"];
         };
       };
+      401: components["responses"]["Unauthorized"];
     };
   };
   getLicenseAudit: {
@@ -3289,6 +3507,7 @@ export interface operations {
           "application/json": components["schemas"]["LicenseAuditEvent"][];
         };
       };
+      401: components["responses"]["Unauthorized"];
       /**
        * @description The audit provider failed to read its log. The body is a
        *     flat `{"error": "<message>"}` object -- NOT the standard
@@ -3330,6 +3549,7 @@ export interface operations {
           "application/json": components["schemas"]["ListTenantsResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3361,6 +3581,10 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      409: components["responses"]["Conflict"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3388,7 +3612,9 @@ export interface operations {
           "application/json": components["schemas"]["TenantQuotaResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3425,6 +3651,7 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3454,6 +3681,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3491,6 +3719,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3521,6 +3750,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3555,7 +3785,10 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      409: components["responses"]["Conflict"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3663,7 +3896,9 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3705,6 +3940,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -3715,7 +3951,10 @@ export interface operations {
         prefix?: string;
         /** @description Opaque pagination cursor from a previous response's `next_cursor`. */
         cursor?: string;
-        /** @description Page size. Defaults to 100, capped at 1000. */
+        /**
+         * @description Page size. Defaults to 100 and is capped at 1000. A value that
+         *     is not a positive integer is ignored and the default applies.
+         */
         limit?: number;
       };
       header?: never;
@@ -3758,7 +3997,9 @@ export interface operations {
           "application/json": components["schemas"]["ListDocumentsResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -3819,8 +4060,8 @@ export interface operations {
            *       "added": 2,
            *       "index_id": "idx_abc123",
            *       "chunk_ids": [
-           *         0,
-           *         1
+           *         "c_7f3a",
+           *         "c_91b2"
            *       ]
            *     }
            */
@@ -3829,9 +4070,12 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       429: components["responses"]["QuotaExceeded"];
       500: components["responses"]["InternalError"];
+      507: components["responses"]["InsufficientStorage"];
     };
   };
   bulkDeleteDocuments: {
@@ -3890,7 +4134,9 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3948,7 +4194,9 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -3983,7 +4231,9 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
+      507: components["responses"]["InsufficientStorage"];
     };
   };
   getDocument: {
@@ -4020,8 +4270,11 @@ export interface operations {
           "application/json": components["schemas"]["GetDocumentResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      500: components["responses"]["InternalError"];
     };
   };
   deleteDocument: {
@@ -4067,6 +4320,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4117,6 +4371,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -4174,7 +4429,9 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -4219,9 +4476,13 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
-      429: components["responses"]["QuotaExceeded"];
-      503: components["responses"]["IndexNotReady"];
+      409: components["responses"]["Conflict"];
+      413: components["responses"]["PayloadTooLarge"];
+      429: components["responses"]["RateLimited"];
+      500: components["responses"]["InternalError"];
+      503: components["responses"]["SearchUnavailable"];
     };
   };
   batchSearch: {
@@ -4274,8 +4535,11 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
-      503: components["responses"]["IndexNotReady"];
+      413: components["responses"]["PayloadTooLarge"];
+      429: components["responses"]["RateLimited"];
+      503: components["responses"]["SearchUnavailable"];
     };
   };
   compactIndex: {
@@ -4298,7 +4562,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Compaction completed. */
+      /** @description Compaction started. */
       200: {
         headers: {
           [name: string]: unknown;
@@ -4307,14 +4571,16 @@ export interface operations {
           /**
            * @example {
            *       "index_id": "idx_abc123",
-           *       "status": "compacted",
-           *       "message": "Index compaction completed"
+           *       "status": "compacting",
+           *       "message": "Index compaction started"
            *     }
            */
           "application/json": components["schemas"]["CompactResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       /**
        * @description Compaction is already in progress for this index. Either the
@@ -4331,7 +4597,7 @@ export interface operations {
           /**
            * @example {
            *       "error": {
-           *         "code": "COMPACT_ALREADY_IN_PROGRESS",
+           *         "code": "conflict",
            *         "message": "compaction already in progress for this index"
            *       }
            *     }
@@ -4385,6 +4651,7 @@ export interface operations {
           "application/json": components["schemas"]["CompactAllResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
@@ -4444,7 +4711,9 @@ export interface operations {
           "application/json": components["schemas"]["ClearResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4478,7 +4747,9 @@ export interface operations {
           "application/json": components["schemas"]["LiveStatsResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
     };
   };
@@ -4516,6 +4787,7 @@ export interface operations {
           "application/json": components["schemas"]["FlushIndexResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
@@ -4558,6 +4830,7 @@ export interface operations {
           "application/json": components["schemas"]["RebuildGraphResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
@@ -4643,8 +4916,13 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
+      429: components["responses"]["RateLimited"];
       500: components["responses"]["InternalError"];
+      503: components["responses"]["SearchUnavailable"];
+      507: components["responses"]["InsufficientStorage"];
     };
   };
   getPendingStatus: {
@@ -4682,7 +4960,9 @@ export interface operations {
           "application/json": components["schemas"]["PendingStatusResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4723,7 +5003,9 @@ export interface operations {
           "application/json": components["schemas"]["ClearPendingResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4778,9 +5060,13 @@ export interface operations {
           "application/json": components["schemas"]["ProcessPendingResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      429: components["responses"]["RateLimited"];
       500: components["responses"]["InternalError"];
+      503: components["responses"]["SearchUnavailable"];
     };
   };
   syncDocuments: {
@@ -4840,8 +5126,11 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
+      507: components["responses"]["InsufficientStorage"];
     };
   };
   searchMultiIndex: {
@@ -4890,8 +5179,13 @@ export interface operations {
       };
       400: components["responses"]["ValidationError"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      409: components["responses"]["Conflict"];
+      413: components["responses"]["PayloadTooLarge"];
+      429: components["responses"]["RateLimited"];
       500: components["responses"]["InternalError"];
+      503: components["responses"]["SearchUnavailable"];
     };
   };
   listUserIndexes: {
@@ -4925,6 +5219,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -4955,6 +5250,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -5031,6 +5327,8 @@ export interface operations {
           "application/json": components["schemas"]["ErrorEnvelope"];
         };
       };
+      413: components["responses"]["PayloadTooLarge"];
+      500: components["responses"]["InternalError"];
       /** @description Job queue is full. */
       503: {
         headers: {
@@ -5047,9 +5345,16 @@ export interface operations {
       query?: {
         /** @description Filter to one job status. */
         status?: "queued" | "running" | "completed" | "failed";
-        /** @description Opaque cursor returned in `next_cursor` of a previous page. */
+        /**
+         * @description Opaque cursor returned in `next_cursor` of a previous page. A
+         *     cursor outside the job-ID character set or longer than 128
+         *     characters returns 400.
+         */
         cursor?: string;
-        /** @description Max jobs per page (default 50, hard cap 200). */
+        /**
+         * @description Jobs per page. A value that is not a positive integer returns
+         *     400. A value above 200 falls back to the default of 50.
+         */
         limit?: number;
       };
       header?: never;
@@ -5068,7 +5373,7 @@ export interface operations {
         };
       };
       400: components["responses"]["ValidationError"];
-      403: components["responses"]["Forbidden"];
+      401: components["responses"]["Unauthorized"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5100,6 +5405,7 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      429: components["responses"]["RateLimited"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5107,7 +5413,16 @@ export interface operations {
     parameters: {
       query?: {
         status?: "queued" | "running" | "completed" | "failed";
+        /**
+         * @description Opaque cursor returned in `next_cursor` of a previous page. A
+         *     cursor outside the job-ID character set or longer than 128
+         *     characters returns 400.
+         */
         cursor?: string;
+        /**
+         * @description Jobs per page. A value that is not a positive integer returns
+         *     400. A value above 200 falls back to the default of 50.
+         */
         limit?: number;
       };
       header?: never;
@@ -5167,14 +5482,15 @@ export interface operations {
           /**
            * @example {
            *       "index_id": "idx_abc123",
-           *       "expired": 17,
-           *       "status": "ok"
+           *       "deleted_count": 17
            *     }
            */
           "application/json": components["schemas"]["GCResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -5196,15 +5512,15 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "indexes_swept": 12,
-           *       "expired": 134,
-           *       "status": "ok"
+           *       "deleted_count": 134
            *     }
            */
           "application/json": components["schemas"]["AdminGCResponse"];
         };
       };
-      500: components["responses"]["InternalError"];
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
     };
   };
   cleanupOrphans: {
@@ -5247,6 +5563,9 @@ export interface operations {
           "application/json": components["schemas"]["AdminCleanupResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5297,6 +5616,7 @@ export interface operations {
           "application/json": components["schemas"]["EmbedSpaceAdminResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
     };
   };
@@ -5334,6 +5654,7 @@ export interface operations {
           "application/json": components["schemas"]["APIKeyStatusResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       500: components["responses"]["InternalError"];
     };
@@ -5371,7 +5692,9 @@ export interface operations {
         };
       };
       400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
+      404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5393,6 +5716,7 @@ export interface operations {
           "application/json": components["schemas"]["BackupScheduleStatus"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
     };
   };
@@ -5428,6 +5752,7 @@ export interface operations {
           "application/json": components["schemas"]["ListClusterNodesResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       500: components["responses"]["InternalError"];
     };
@@ -5471,6 +5796,7 @@ export interface operations {
           "application/json": components["schemas"]["ListClusterShardsResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       500: components["responses"]["InternalError"];
     };
@@ -5502,6 +5828,7 @@ export interface operations {
           "application/json": components["schemas"]["ClusterHealthResponse"];
         };
       };
+      401: components["responses"]["Unauthorized"];
       /** @description Cluster is unhealthy. */
       503: {
         headers: {
@@ -5706,6 +6033,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorEnvelope"];
         };
       };
+      413: components["responses"]["PayloadTooLarge"];
       /**
        * @description The backup predates stored index settings (made before a
        *     manifest carried `meta.index`) and its source index no
@@ -5800,6 +6128,7 @@ export interface operations {
           "application/json": components["schemas"]["ListAPIKeysResponse"];
         };
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
@@ -5844,6 +6173,7 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };
@@ -5874,6 +6204,7 @@ export interface operations {
         };
         content?: never;
       };
+      400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
@@ -5906,6 +6237,7 @@ export interface operations {
       };
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
       500: components["responses"]["InternalError"];
     };
@@ -5979,6 +6311,7 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       404: components["responses"]["NotFound"];
+      413: components["responses"]["PayloadTooLarge"];
       500: components["responses"]["InternalError"];
     };
   };

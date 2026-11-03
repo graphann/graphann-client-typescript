@@ -130,6 +130,7 @@ async function doFetch<T>(
     ...(req.headers ?? {}),
   };
   if (opts.apiKey) headers["x-api-key"] = opts.apiKey;
+  if (opts.nodeAdminToken) headers["x-graphann-admin-token"] = opts.nodeAdminToken;
   if (opts.tenantId && !headers["x-tenant-id"]) headers["x-tenant-id"] = opts.tenantId;
 
   let body: BodyInit | undefined;
