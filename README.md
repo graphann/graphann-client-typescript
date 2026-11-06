@@ -16,7 +16,7 @@ vector database.
 Install the built package from the GitHub release:
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.11.0/graphann-client-0.11.0.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.12.0/graphann-client-0.12.0.tgz
 ```
 
 ## Quickstart

@@ -4,6 +4,16 @@ All notable changes to `@graphann/client` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## 0.12.0 - 2026-11-06
+
+### Added
+
+- `SearchFilter.omit_metadata` drops the `metadata` field from every result. The server refuses it with 400 together with `group_by` or `recency`.
+
+### Notes
+
+- Note: the server spec has further fields (metadata_filter operators, recency, context_budget, min_score) that these SDKs do not yet type.
+
 ## 0.11.0 - 2026-11-03
 
 ### Added

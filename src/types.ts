@@ -170,8 +170,8 @@ export type DeleteChunksResponse = components["schemas"]["DeleteChunksResponse"]
 // ---------------------------------------------------------------------------
 
 /** `omit_text` has a server-side default (`false`), so it's optional here even though the spec marks it always-present in the wire shape. */
-export type SearchFilter = Omit<components["schemas"]["SearchFilter"], "omit_text"> &
-  Partial<Pick<components["schemas"]["SearchFilter"], "omit_text">>;
+export type SearchFilter = Omit<components["schemas"]["SearchFilter"], "omit_text" | "omit_metadata"> &
+  Partial<Pick<components["schemas"]["SearchFilter"], "omit_text" | "omit_metadata">>;
 
 /** Body fields accepted by `POST .../search`, as sent on the wire. */
 export type SearchRequestBody = Omit<components["schemas"]["SearchRequest"], "filter"> & {

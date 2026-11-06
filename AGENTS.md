@@ -8,7 +8,7 @@ current source (`src/client.ts`, `src/types.ts`, `src/options.ts`,
 ## Install
 
 ```bash
-npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.11.0/graphann-client-0.11.0.tgz
+npm install https://github.com/graphann/graphann-client-typescript/releases/download/v0.12.0/graphann-client-0.12.0.tgz
 ```
 
 ESM-first with a CommonJS fallback. Runs on Node 20+, Deno, Bun,
